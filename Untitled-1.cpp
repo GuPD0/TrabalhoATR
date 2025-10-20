@@ -1,21 +1,22 @@
+// main.cpp (modificado para incluir a thread TratamentoSensores)
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <vector>
-#include <numeric>
+#include <numeric> // Para std::accumulate
 #include <boost/asio.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include <classes.hpp>
+#include "BufferCircular.hpp"
 
 // Função para simular leitura de dados do servidor (futuramente, substitua por publisher/subscriber real)
 DadosProcessados lerDadosServidor() {
-    // Simulação: gera valores aleatórios
+    // Simulação: gera valores aleatórios (substitua por leitura real)
     static int contador = 0;
     DadosProcessados dados;
-    dados.id = ++contador; // ID único
-    dados.posicao_x = 100 + contador;
-    dados.posicao_y = 200 + contador;
-    dados.angulo_x = 0 + contador;
+    dados.posicao_x = 100 + contador; // Simula posição x
+    dados.posicao_y = 200 + contador; // Simula posição y
+    dados.angulo_x = 0 + contador;    // Simula ângulo
+    contador++;
     return dados;
 }
 
