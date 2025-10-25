@@ -7,6 +7,7 @@
 #include <variant>
 #include <algorithm>
 #include <condition_variable>
+#include <string>
 
 // Struct para os dados processados
 struct DadosProcessados {
@@ -16,8 +17,30 @@ struct DadosProcessados {
     int angulo_x;
 };
 
+// MONITORAMENTO DE FALHAS
+
+// Enum para definir os tipos de falha de forma segura e legível.
+// Isso evita o uso de números ou strings, prevenindo erros.
+enum class TipoFalha {
+    OK,                 // Nenhum defeito detectado.
+    Eletrica,           // Falha no sistema elétrico (i_falha_eletrica).
+    Hidraulica,         // Falha no sistema hidráulico (i_falha_hidraulica).
+    TemperaturaAlerta,  // Temperatura acima do nível de alerta (T > 95°C).
+    TemperaturaCritica  // Temperatura acima do nível crítico, gerando defeito (T > 120°C).
+};
+
+// Struct para encapsular as informações de um evento de falha.
+// Este é o "evento" que será disparado pela tarefa de monitoramento.
+struct FalhaEvento {
+    TipoFalha tipo;         // O tipo da falha, usando o enum definido acima.
+    std::string descricao;  // Uma descrição textual da falha para logging e display.
+};
+
+// MONITORAMENTO DE FALHAS
+
 // Define os tipos possíveis no buffer (adicione mais se precisar)
-using DataVariant = std::variant<DadosProcessados, int, std::string>;
+// Adicionei FalhaEvento para que o buffer possa conter tanto dados de sensores quanto eventos de falha.
+using DataVariant = std::variant<DadosProcessados, FalhaEvento>;
 
 class BufferCircular {
 private:
