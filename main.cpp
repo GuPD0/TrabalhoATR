@@ -7,6 +7,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <classes.hpp>
 #include <functional>
+#include <variant>
 
 // Função para simular leitura de dados do servidor (futuramente, substitua por publisher/subscriber real)
 DadosProcessados lerDadosServidor() {
@@ -20,7 +21,7 @@ DadosProcessados lerDadosServidor() {
     return dados;
 }
 
-// MONITORAMENTO DE FALHAS
+// INÍCIO MONITORAMENTO DE FALHAS
 
 // Função para simular a leitura dos sensores de falha (i_temperatura, i_falha_eletrica, etc.).
 // No sistema real, esta função seria substituída por uma leitura de hardware ou um subscriber MQTT.
@@ -49,7 +50,7 @@ FalhaEvento lerSensoresDeFalha() {
     return {TipoFalha::OK, "Sistema operando normalmente."};
 }
 
-// MONITORAMENTO DE FALHAS
+// FIM MONITORAMENTO DE FALHAS
 
 // Thread TratamentoSensores
 void TratamentoSensores(BufferCircular& buf) {
@@ -89,7 +90,7 @@ void TratamentoSensores(BufferCircular& buf) {
     io.run(); // Mantém a thread rodando
 }
 
-// MONITORAMENTO DE FALHAS
+// INÍCIO MONITORAMENTO DE FALHAS
 
 // Função da thread para a tarefa de Monitoramento de Falhas.
 // Ela é executada em paralelo com as outras tarefas do sistema.
@@ -129,20 +130,109 @@ void MonitoramentoDeFalhas(BufferCircular& buf) {
     io.run();
 }
 
-// MONITORAMENTO DE FALHAS
+// FIM MONITORAMENTO DE FALHAS
+
+// INÍCIO LÓGICA DE COMANDO
+
+// Função da thread para a tarefa de Lógica de Comando.
+// Esta função atua como um "consumidor", lendo dados do buffer e tomando decisões.
+void LogicaDeComando(BufferCircular& buf) {
+    // Cria um objeto para guardar o estado atual do veículo.
+    // Este objeto será atualizado conforme os dados são lidos do buffer.
+    EstadoVeiculo estado_atual;
+
+    // Inicia um loop infinito. A thread ficará aqui para sempre, processando dados.
+    while (true) {
+        // A linha mais importante: a thread vai tentar pegar um item do buffer.
+        // Se o buffer estiver vazio, a função 'pop()' vai fazer a thread esperar (bloquear)
+        // até que um novo item seja colocado por outra thread (TratamentoSensores ou MonitoramentoDeFalhas).
+        DataVariant item = buf.pop();
+
+        // 'std::visit' é uma ferramenta do C++ moderno para lidar com 'std::variant'.
+        // Ele inspeciona o tipo de dado que está dentro de 'item' e executa o código correto para ele.
+        // O trecho '[&](auto&& arg)' cria uma função anônima (lambda) que pode acessar as variáveis locais (como 'estado_atual').
+        std::visit([&](auto&& arg) {
+            // Descobre o tipo exato do dado que foi retirado do buffer.
+            using T = std::decay_t<decltype(arg)>;
+
+            // Se o tipo do dado for 'DadosProcessados' (vindo de TratamentoSensores)...
+            if constexpr (std::is_same_v<T, DadosProcessados>) {
+                // Por enquanto, apenas imprimimos uma mensagem para confirmar que recebemos os dados.
+                // No futuro, aqui entraria a lógica para enviar comandos aos atuadores (o_aceleracao, o_direcao).
+                // 'arg' aqui é o objeto 'DadosProcessados' que foi lido.
+                std::cout << "LogicaDeComando: Recebeu dados de sensor. ID: " << arg.id << std::endl;
+            
+            // Se o tipo do dado for 'FalhaEvento' (vindo de MonitoramentoDeFalhas)...
+            } else if constexpr (std::is_same_v<T, FalhaEvento>) {
+                // Imprime a descrição da falha que foi recebida.
+                std::cout << "LogicaDeComando: Recebeu evento de FALHA! Desc: " << arg.descricao << std::endl;
+                // Atualiza o estado do veículo para indicar que há um defeito ativo.
+                // Isso corresponde a 'e_defeito = 1'.
+                estado_atual.e_defeito = true;
+
+            // Se o tipo do dado for 'ComandoOperador' (viria da Interface Local)...
+            } else if constexpr (std::is_same_v<T, ComandoOperador>) {
+                // Imprime o tipo de comando recebido para depuração.
+                std::cout << "LogicaDeComando: Recebeu um COMANDO do operador." << std::endl;
+                
+                // Usa uma estrutura 'switch' para executar uma ação diferente para cada tipo de comando.
+                switch (arg.comando) {
+                    // Caso o comando seja para ativar o modo automático...
+                    case TipoComando::SET_AUTOMATICO:
+                        // Atualiza o estado para modo automático. Corresponde a 'e_automatico = 1'.
+                        estado_atual.e_automatico = true;
+                        break; // Termina o processamento deste caso.
+                    // Caso o comando seja para ativar o modo manual...
+                    case TipoComando::SET_MANUAL:
+                        // Atualiza o estado para modo manual. Corresponde a 'e_automatico = 0'.
+                        estado_atual.e_automatico = false;
+                        break;
+                    // Caso o comando seja para rearmar uma falha...
+                    case TipoComando::REARME_FALHA:
+                        // Atualiza o estado para indicar que não há mais defeito. Corresponde a 'e_defeito = 0'.
+                        estado_atual.e_defeito = false;
+                        break;
+                    // Outros comandos (acelerar, etc.) seriam tratados aqui no futuro.
+                    default:
+                        break;
+                }
+            }
+        }, item); // Fim do std::visit
+
+        // Após processar um item e potencialmente atualizar o estado, imprime o estado atual do veículo.
+        // Isso nos permite ver em tempo real como a Lógica de Comando está funcionando.
+        // A expressão '(estado_atual.e_automatico? "Automatico" : "Manual")' é um atalho para escolher a string correta.
+        std::cout << ">> ESTADO ATUAL DO VEICULO:[Modo: " << (estado_atual.e_automatico? "Automatico" : "Manual") << "]" << std::endl;
+    }
+}
+
+// FIM LÓGICA DE COMANDO
 
 int main() {
     BufferCircular buf(200);
 
+    // INÍCIO LÓGICA DE COMANDO
+    // Para testar a lógica de comandos sem ter a Interface Local pronta,
+    // podemos colocar um comando de teste diretamente no buffer antes de iniciar as threads.
+    // Aqui, estamos simulando o operador pressionando a tecla para o MODO MANUAL.
+    buf.push(ComandoOperador{TipoComando::SET_MANUAL});
+    // FIM LÓGICA DE COMANDO
+
     // Inicia a thread TratamentoSensores
     std::thread thread_sensores(TratamentoSensores, std::ref(buf));
 
-    // --- INÍCIO DA SEÇÃO DE MONITORAMENTO DE FALHAS ---
+    // INÍCIO MONITORAMENTO DE FALHAS
     // Cria e inicia a thread para a tarefa de Monitoramento de Falhas.
     // A função MonitoramentoDeFalhas será executada em seu próprio fluxo de controle.
     // std::ref(buf) é usado para passar o buffer por referência para a thread.
     std::thread thread_falhas(MonitoramentoDeFalhas, std::ref(buf));
-    // --- FIM DA SEÇÃO DE MONITORAMENTO DE FALHAS ---
+    // FIM MONITORAMENTO DE FALHAS
+
+    // INÍCIO LÓGICA DE COMANDO
+    // Cria e inicia a thread para a tarefa de Lógica de Comando.
+    // A função LogicaDeComando será executada em seu próprio fluxo de controle.
+    std::thread thread_logica(LogicaDeComando, std::ref(buf));
+    // FIM LÓGICA DE COMANDO
 
     // Mantém a thread principal viva por 10 segundos para observar a execução das outras threads.
     std::this_thread::sleep_for(std::chrono::seconds(10));

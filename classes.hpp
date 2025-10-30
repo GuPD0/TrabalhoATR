@@ -17,7 +17,7 @@ struct DadosProcessados {
     int angulo_x;
 };
 
-// MONITORAMENTO DE FALHAS
+// INÍCIO MONITORAMENTO DE FALHAS
 
 // Enum para definir os tipos de falha de forma segura e legível.
 // Isso evita o uso de números ou strings, prevenindo erros.
@@ -36,11 +36,45 @@ struct FalhaEvento {
     std::string descricao;  // Uma descrição textual da falha para logging e display.
 };
 
-// MONITORAMENTO DE FALHAS
+// FIM MONITORAMENTO DE FALHAS
+
+// INÍCIO LÓGICA DE COMANDO
+
+// Enum para representar os comandos do operador, conforme Tabela 2.
+// Usar um enum torna o código mais seguro e fácil de ler.
+enum class TipoComando {
+    SET_AUTOMATICO, // Comando c_automatico
+    SET_MANUAL,     // Comando c_man
+    REARME_FALHA,   // Comando c_rearme
+    ACELERA,        // Comando c_acelera
+    GIRA_DIREITA,   // Comando c_direita
+    GIRA_ESQUERDA   // Comando c_esquerda
+};
+
+// Struct para representar um comando vindo da Interface Local.
+// Quando a Interface Local for implementada, ela enviará objetos deste tipo.
+struct ComandoOperador {
+    TipoComando comando; // O tipo de comando que o operador executou.
+};
+
+// Struct para armazenar o estado atual do veículo, conforme Tabela 2.
+// A tarefa Lógica de Comando irá manter e atualizar um objeto deste tipo.
+struct EstadoVeiculo {
+    // Representa a variável e_defeito. 'true' se há defeito, 'false' se não há.
+    // Inicia como 'false' (sem defeito).
+    bool e_defeito = false;
+
+    // Representa a variável e_automatico. 'true' se está em modo automático, 'false' se manual.
+    // Inicia como 'false' (modo manual, que é mais seguro).
+    bool e_automatico = false;
+};
+
+// FIM LÓGICA DE COMANDO
 
 // Define os tipos possíveis no buffer (adicione mais se precisar)
 // Adicionei FalhaEvento para que o buffer possa conter tanto dados de sensores quanto eventos de falha.
-using DataVariant = std::variant<DadosProcessados, FalhaEvento>;
+// Adicionei ComandoOperador para que a Lógica de Comando possa receber e processar comandos.
+using DataVariant = std::variant<DadosProcessados, FalhaEvento, ComandoOperador>;
 
 class BufferCircular {
 private:
