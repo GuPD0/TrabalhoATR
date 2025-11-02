@@ -57,6 +57,7 @@ void TratamentoSensores(BufferCircular& buf) {
     io.run(); // Mantém a thread rodando
 }
 
+
 int main() {
     BufferCircular buf(200); // Buffer de 200 posições
 
