@@ -18,7 +18,6 @@ struct DadosProcessados {
 };
 
 // INÍCIO MONITORAMENTO DE FALHAS
-
 // Enum para definir os tipos de falha de forma segura e legível.
 // Isso evita o uso de números ou strings, prevenindo erros.
 enum class TipoFalha {
@@ -35,11 +34,9 @@ struct FalhaEvento {
     TipoFalha tipo;         // O tipo da falha, usando o enum definido acima.
     std::string descricao;  // Uma descrição textual da falha para logging e display.
 };
-
 // FIM MONITORAMENTO DE FALHAS
 
 // INÍCIO LÓGICA DE COMANDO
-
 // Enum para representar os comandos do operador, conforme Tabela 2.
 // Usar um enum torna o código mais seguro e fácil de ler.
 enum class TipoComando {
@@ -68,12 +65,9 @@ struct EstadoVeiculo {
     // Inicia como 'false' (modo manual, que é mais seguro).
     bool e_automatico = false;
 };
-
 // FIM LÓGICA DE COMANDO
 
 // Define os tipos possíveis no buffer (adicione mais se precisar)
-// Adicionei FalhaEvento para que o buffer possa conter tanto dados de sensores quanto eventos de falha.
-// Adicionei ComandoOperador para que a Lógica de Comando possa receber e processar comandos.
 using DataVariant = std::variant<DadosProcessados, FalhaEvento, ComandoOperador>;
 
 class BufferCircular {
@@ -88,9 +82,10 @@ private:
     std::condition_variable cv_not_full;
 
 public:
-    BufferCircular(size_t cap) : capacity(cap), inicio(0), fim(0), count(0), buffer(cap) {}
+    // Construtor com capacidade fixa em 200 (tamanho máximo)
+    BufferCircular() : capacity(200), inicio(0), fim(0), count(0), buffer(200) {}
 
-    // Adiciona um item ao buffer (bloqueia se cheio),item pode ser qualquer tipo do variant
+    // Adiciona um item ao buffer (bloqueia se cheio), item pode ser qualquer tipo do variant
     void push(DataVariant item) {
         std::unique_lock<std::mutex> lock(mtx);
         cv_not_full.wait(lock, [this]() { return count < capacity; });
@@ -109,40 +104,6 @@ public:
         --count;
         cv_not_full.notify_one();
         return item;
-    }
-
-    // Busca um item por ID (apenas se for DadosProcessados; lança exception se não encontrar)
-    DataVariant get(int id) {
-        std::lock_guard<std::mutex> lock(mtx);
-        auto it = std::find_if(buffer.begin(), buffer.end(), [id](const DataVariant& item) {
-            // Verifica se e DadosProcessados e se o id bate
-            if (std::holds_alternative<DadosProcessados>(item)) {
-                return std::get<DadosProcessados>(item).id == id;
-            }
-            return false;
-        });
-        if (it != buffer.end()) {
-            return *it; // Retorna copia
-        }
-        throw std::out_of_range("ID não encontrado no buffer");
-    }
-
-    // Remove um item por ID (apenas se for DadosProcessados)
-    bool removeById(int id) {
-        std::lock_guard<std::mutex> lock(mtx);
-        auto it = std::find_if(buffer.begin(), buffer.end(), [id](const DataVariant& item) {
-            if (std::holds_alternative<DadosProcessados>(item)) {
-                return std::get<DadosProcessados>(item).id == id;
-            }
-            return false;
-        });
-        if (it != buffer.end()) {
-            buffer.erase(it);
-            --count;
-            cv_not_full.notify_one();
-            return true;
-        }
-        return false;
     }
 
     // Verifica se está vazio

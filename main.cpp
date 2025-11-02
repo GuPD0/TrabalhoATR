@@ -208,7 +208,7 @@ void LogicaDeComando(BufferCircular& buf) {
 // FIM LÓGICA DE COMANDO
 
 int main() {
-    BufferCircular buf(200);
+    BufferCircular buf;
 
     // INÍCIO LÓGICA DE COMANDO
     // Para testar a lógica de comandos sem ter a Interface Local pronta,
