@@ -8,17 +8,38 @@
 #include "classes.hpp"
 #include <functional>
 #include <variant>
-#include "SimulacaoDaMina.cpp"
-#include "threads.cpp"
+#include <atomic>
+#include <signal.h>
+//#include "SimulacaoDaMina.cpp" tem que retirar
+#include "threads.hpp"
+#include "mqtt.hpp"
+
+std::atomic<bool> running{true};
+
+// Função para capturar Ctrl+C
+void handle_sigint(int) {
+    running.store(false);
+}
 
 int main() {
+    signal(SIGINT, handle_sigint);
     BufferCircular buf;
+    iniciar_mqtt(buf);
+    
+    // thread dedicada para o loop do MQTT
+    std::thread thread_mqtt([](){
+        while (true) {
+            mqtt_loop();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
 
     // INÍCIO LÓGICA DE COMANDO
     // Para testar a lógica de comandos sem ter a Interface Local pronta,
     // podemos colocar um comando de teste diretamente no buffer antes de iniciar as threads.
     // Aqui, estamos simulando o operador pressionando a tecla para o MODO MANUAL.
-    buf.push(ComandoOperador{TipoComando::SET_MANUAL});
+    //buf.push(ComandoOperador{TipoComando::SET_MANUAL});
+    // função ainda não implementada
     // FIM LÓGICA DE COMANDO
 
     // Inicia a thread TratamentoSensores
@@ -38,13 +59,24 @@ int main() {
     // FIM LÓGICA DE COMANDO
 
     // Mantém a thread principal viva por 10 segundos para observar a execução das outras threads.
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-
+    while (running.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
     // Desacopla as threads da thread principal.
     // Isso permite que a função main termine sem precisar esperar (join) pelas threads.
     // ATENÇÃO: Em uma aplicação final, um mecanismo de encerramento limpo (com join) é preferível.
-    thread_sensores.detach();
-    thread_falhas.detach();
+    // thread_sensores.detach();
+    // thread_falhas.detach();
+    // thread_logica.detach();
+
+    // Sinaliza para as threads pararem
+    running.store(false);
+
+    // Espera todas as threads terminarem
+    thread_mqtt.join();
+    thread_sensores.join();
+    thread_falhas.join();
+    thread_logica.join();
 
     std::cout << "Execução principal concluída após 10 segundos." << std::endl;
     return 0;
