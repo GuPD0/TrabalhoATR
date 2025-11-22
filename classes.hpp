@@ -9,6 +9,15 @@
 #include <condition_variable>
 #include <string>
 
+struct DadosSensores {
+    int pos_x;
+    int pos_y;
+    int angulo;
+    int temperatura;
+    bool falha_eletrica;
+    bool falha_hidraulica;
+};
+
 // Struct para os dados processados
 struct DadosProcessados {
     int id; // Campo único para identificar o item
@@ -45,13 +54,14 @@ enum class TipoComando {
     REARME_FALHA,   // Comando c_rearme
     ACELERA,        // Comando c_acelera
     GIRA_DIREITA,   // Comando c_direita
-    GIRA_ESQUERDA   // Comando c_esquerda
+    GIRA_ESQUERDA,  // Comando c_esquerda
+    NENHUM          //estado neutro
 };
 
 // Struct para representar um comando vindo da Interface Local.
 // Quando a Interface Local for implementada, ela enviará objetos deste tipo.
 struct ComandoOperador {
-    TipoComando comando; // O tipo de comando que o operador executou.
+    TipoComando comando = TipoComando::NENHUM; // O tipo de comando que o operador executou.
 };
 
 // Struct para armazenar o estado atual do veículo, conforme Tabela 2.
@@ -59,16 +69,16 @@ struct ComandoOperador {
 struct EstadoVeiculo {
     // Representa a variável e_defeito. 'true' se há defeito, 'false' se não há.
     // Inicia como 'false' (sem defeito).
-    bool e_defeito = false;
+    bool e_defeito = false; //estado de falha
 
     // Representa a variável e_automatico. 'true' se está em modo automático, 'false' se manual.
     // Inicia como 'false' (modo manual, que é mais seguro).
-    bool e_automatico = false;
+    bool e_automatico = false; //modo de operação (manual/auto)
 };
 // FIM LÓGICA DE COMANDO
 
 // Define os tipos possíveis no buffer (adicione mais se precisar)
-using DataVariant = std::variant<DadosProcessados, FalhaEvento, ComandoOperador>;
+using DataVariant = std::variant<DadosSensores, DadosProcessados, FalhaEvento, ComandoOperador>;
 
 class BufferCircular {
 private:
