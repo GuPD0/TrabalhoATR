@@ -1,4 +1,5 @@
 #include <iostream>
+#include <map>
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -49,60 +50,34 @@ void TratamentoSensores(BufferCircular& buf) {
 // ===================================================================
 // MONITORAMENTO DE FALHAS
 // ===================================================================
-void MonitoramentoDeFalhas(BufferCircular& buf) {
-
-    while (running.load()) {
-
-        // Lê um item do buffer
-        DataVariant item = buf.pop();
-
-        // Só processa sensores
-        if (std::holds_alternative<DadosSensores>(item)) {
-
-            DadosSensores dados = std::get<DadosSensores>(item);
-            FalhaEvento evento;
-
-            bool houve_falha = false;
-
-            // ---- TEMPERATURA ----
-            if (dados.temperatura > 120) {
-                evento.tipo = TipoFalha::TemperaturaCritica;
-                evento.descricao = "Temperatura crítica (>120°C)";
-                houve_falha = true;
-            }
-            else if (dados.temperatura > 95) {
-                evento.tipo = TipoFalha::TemperaturaAlerta;
-                evento.descricao = "Temperatura em alerta (>95°C)";
-                houve_falha = true;
-            }
-
-            // ---- FALHA ELÉTRICA ----
-            if (dados.falha_eletrica) {
-                evento.tipo = TipoFalha::Eletrica;
-                evento.descricao = "Falha elétrica detectada";
-                houve_falha = true;
-            }
-
-            // ---- FALHA HIDRÁULICA ----
-            if (dados.falha_hidraulica) {
-                evento.tipo = TipoFalha::Hidraulica;
-                evento.descricao = "Falha hidráulica detectada";
-                houve_falha = true;
-            }
-
-            if (houve_falha) {
-                std::cout << "[MonitoramentoDeFalhas] "
-                          << evento.descricao << std::endl;
-
-                // joga o evento no buffer
-                buf.push(evento);
+// Estrutura para falhas por caminhão
+struct FalhasStatus {
+    std::atomic<bool> temperatura{false};
+    std::atomic<bool> eletrica{false};
+    std::atomic<bool> hidraulica{false};
+};
+// Mapa global compartilhado entre thread MQTT e thread de monitoramento
+std::map<int, FalhasStatus> falhas_caminhoes;
+std::mutex falhas_mutex;
+void MonitoramentoDeFalhas() {
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(falhas_mutex);
+            for (const auto& [truck_id, status] : falhas_caminhoes) {
+                if (status.temperatura.load()) {
+                    std::cout << "MonitoramentoDeFalhas: Falha de Temperatura detectada no caminhão " << truck_id << std::endl;
+                }
+                if (status.eletrica.load()) {
+                    std::cout << "MonitoramentoDeFalhas: Falha Elétrica detectada no caminhão " << truck_id << std::endl;
+                }
+                if (status.hidraulica.load()) {
+                    std::cout << "MonitoramentoDeFalhas: Falha Hidráulica detectada no caminhão " << truck_id << std::endl;
+                }
             }
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Aguarda antes da próxima checagem para evitar uso excessivo de CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
-
-    std::cout << "[MonitoramentoDeFalhas] encerrando..." << std::endl;
 }
 
 // ===================================================================

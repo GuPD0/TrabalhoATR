@@ -18,15 +18,15 @@ extern "C" {
 class Truck {
 public:
     int id;
-    bool manual_mode;  // true = manual, false = automático
+    bool manual_mode;
 
-    // Sensores (Inputs) - calculados/simulados
+    // Sensores (Inputs)
     int i_posicao_x;
     int i_posicao_y;
     int i_angulo;
 
     // Tratamento de falha
-    int i_temperatura;
+    int i_temperatura;           // Corrigido para int (temperatura real)
     bool i_falha_eletrica;
     bool i_falha_hidraulica;
 
@@ -44,11 +44,11 @@ public:
     bool inject_defect;
 
     Truck(int truck_id) : id(truck_id), manual_mode(false),
-                          i_posicao_x(0), i_posicao_y(0), i_angulo(0),
-                          i_temperatura(25), i_falha_eletrica(false), i_falha_hidraulica(false),
-                          o_aceleracao(0), o_direcao(0),
-                          velocidade(0.0), pos_x_real(0.0), pos_y_real(0.0), angulo_real(0.0),
-                          inject_defect(false) {}
+        i_posicao_x(0), i_posicao_y(0), i_angulo(0),
+        i_temperatura(25), i_falha_eletrica(false), i_falha_hidraulica(false),
+        o_aceleracao(0), o_direcao(0),
+        velocidade(0.0), pos_x_real(0.0), pos_y_real(0.0), angulo_real(0.0),
+        inject_defect(false) {}
 
     void publishData(struct mosquitto* mosq) {
         std::string topic_base = "truck/" + std::to_string(id) + "/";
@@ -70,7 +70,6 @@ public:
 
     void updateData(double dt = 1.0) {
         if (manual_mode) {
-            // Modo manual: posições já definidas pelo usuário, apenas adicionar ruído
             double ruido_x = (rand() % 11 - 5);
             double ruido_y = (rand() % 11 - 5);
             double ruido_ang = (rand() % 11 - 5) * 0.1;
@@ -78,7 +77,6 @@ public:
             i_posicao_y = static_cast<int>(pos_y_real + ruido_y);
             i_angulo = static_cast<int>((angulo_real * 180.0 / M_PI) + ruido_ang);
         } else {
-            // Modo automático: simulação física com equação de diferenças
             double accel_real = (o_aceleracao / 100.0) * 10.0;
             angulo_real = (o_direcao * M_PI / 180.0);
             velocidade += accel_real * dt;
@@ -86,8 +84,6 @@ public:
             if (velocidade < -10.0) velocidade = -10.0;
             pos_x_real += velocidade * dt * cos(angulo_real);
             pos_y_real += velocidade * dt * sin(angulo_real);
-
-            // Adicionar ruído
             double ruido_x = (rand() % 11 - 5);
             double ruido_y = (rand() % 11 - 5);
             double ruido_ang = (rand() % 11 - 5) * 0.1;
@@ -96,14 +92,17 @@ public:
             i_angulo = static_cast<int>((angulo_real * 180.0 / M_PI) + ruido_ang);
         }
 
-        // Simular temperatura com ruído
         double ruido_temp = (rand() % 21 - 10);
-        i_temperatura = 25 + (rand() % 51 - 25) + static_cast<int>(ruido_temp);
-        if (i_temperatura < -100) i_temperatura = -100;
-        if (i_temperatura > 200) i_temperatura = 200;
+        if (!inject_defect) {
+            i_temperatura = 25 + (rand() % 51 - 25) + static_cast<int>(ruido_temp);
+            if (i_temperatura < -100) i_temperatura = -100;
+            if (i_temperatura > 200) i_temperatura = 200;
+            i_falha_eletrica = ((rand() % 100) < 2);
+            i_falha_hidraulica = ((rand() % 100) < 2);
+        } 
+        // Se existe injeção de falha, deixa os valores conforme setados
+        // Por exemplo, temperatura já será fixada externamente
 
-        i_falha_eletrica = inject_defect || ((rand() % 100) < 2);
-        i_falha_hidraulica = (rand() % 100) < 2;
         inject_defect = false;
     }
 
@@ -249,11 +248,43 @@ public:
                 std::cout << "Comando recebido: " << command << std::endl;
                 if (command == "add_truck") {
                     addTruck(next_truck_id++);
-                } else if (command.find("inject_failure:") == 0) {
+                }
+                else if (command.find("inject_failure:") == 0) {
                     int truck_id = std::stoi(command.substr(15));
                     injectFailure(truck_id);
-                } else if (command.find("set_manual:") == 0) {
-                    // Formato: set_manual:truck_id:x:y:ang
+                }
+                // Novos comandos para falhas específicas
+                else if (command.find("inject_temp_failure:") == 0) {
+                    int truck_id = std::stoi(command.substr(19));
+                    std::lock_guard<std::mutex> lock(mtx);
+                    for (auto& truck : trucks) {
+                        if (truck.id == truck_id) {
+                            truck.i_temperatura = 130; // valor alto para falha
+                            std::cout << "Falha de temperatura injetada no caminhão " << truck_id << std::endl;
+                        }
+                    }
+                }
+                else if (command.find("inject_electric_failure:") == 0) {
+                    int truck_id = std::stoi(command.substr(22));
+                    std::lock_guard<std::mutex> lock(mtx);
+                    for (auto& truck : trucks) {
+                        if (truck.id == truck_id) {
+                            truck.i_falha_eletrica = true;
+                            std::cout << "Falha elétrica injetada no caminhão " << truck_id << std::endl;
+                        }
+                    }
+                }
+                else if (command.find("inject_hydraulic_failure:") == 0) {
+                    int truck_id = std::stoi(command.substr(24));
+                    std::lock_guard<std::mutex> lock(mtx);
+                    for (auto& truck : trucks) {
+                        if (truck.id == truck_id) {
+                            truck.i_falha_hidraulica = true;
+                            std::cout << "Falha hidráulica injetada no caminhão " << truck_id << std::endl;
+                        }
+                    }
+                }
+                else if (command.find("set_manual:") == 0) {
                     size_t pos1 = command.find(":", 11);
                     size_t pos2 = command.find(":", pos1 + 1);
                     size_t pos3 = command.find(":", pos2 + 1);
@@ -262,7 +293,8 @@ public:
                     int y = std::stoi(command.substr(pos2 + 1, pos3 - pos2 - 1));
                     int ang = std::stoi(command.substr(pos3 + 1));
                     setManualPosition(truck_id, x, y, ang);
-                } else if (command.find("set_auto:") == 0) {
+                }
+                else if (command.find("set_auto:") == 0) {
                     int truck_id = std::stoi(command.substr(9));
                     setAutoMode(truck_id);
                 }
@@ -285,10 +317,8 @@ public:
 };
 
 int main() {
-    std::cout << "Iniciando simulação da mina..." << std::endl;
-    
+    std::cout << "Iniciando simulação da mina..." << std::endl;    
     SimulacaoMina simulacao;
-    simulacao.run();  // Loop infinito: atualiza caminhões, publica MQTT, escuta sockets
-    
-    return 0;  // Nunca alcançado, mas bom para estrutura
+    simulacao.run();  // Loop infinito    
+    return 0;
 }

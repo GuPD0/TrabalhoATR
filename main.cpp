@@ -10,7 +10,6 @@
 #include <variant>
 #include <atomic>
 #include <signal.h>
-//#include "SimulacaoDaMina.cpp" tem que retirar
 #include "threads.hpp"
 #include "mqtt.hpp"
 

@@ -1,81 +1,137 @@
 #include <iostream>
 #include <string>
 #include <mosquitto.h>
-#include "mqtt.hpp"
-#include "classes.hpp"
+#include <vector>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
 #include <atomic>
 
+// Definição simplificada da estrutura DadosSensores
+struct DadosSensores {
+    int pos_x = 0;
+    int pos_y = 0;
+    int angulo = 0;
+    int temperatura = 0;
+    bool falha_eletrica = false;
+    bool falha_hidraulica = false;
+};
+
+// Buffer Circular thread-safe para DadosSensores
+class BufferCircular {
+private:
+    std::vector<DadosSensores> buffer;
+    size_t capacidade;
+    size_t inicio = 0;
+    size_t fim = 0;
+    size_t tamanho = 0;
+    std::mutex mtx;
+    std::condition_variable cv;
+
+public:
+    BufferCircular(size_t cap) : capacidade(cap), buffer(cap) {}
+
+    void push(const DadosSensores& item) {
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [this]{ return tamanho < capacidade; });
+        buffer[fim] = item;
+        fim = (fim + 1) % capacidade;
+        ++tamanho;
+        cv.notify_all();
+    }
+
+    DadosSensores pop() {
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [this]{ return tamanho > 0; });
+        DadosSensores item = buffer[inicio];
+        inicio = (inicio + 1) % capacidade;
+        --tamanho;
+        cv.notify_all();
+        return item;
+    }
+};
+
+// Variáveis globais e mutex para sincronização
 static struct mosquitto* mosq_caminhao = nullptr;
 static BufferCircular* buffer_ptr = nullptr;
-
-// Estado temporário do último pacote de sensores recebido
+static std::mutex temp_mutex;
 static DadosSensores sensores_temp;
+static std::atomic<bool> pos_x_recebido(false), pos_y_recebido(false),
+    angulo_recebido(false), temperatura_recebida(false),
+    falha_eletrica_recebida(false), falha_hidraulica_recebida(false);
+
+void reset_recebidos_flags() {
+    pos_x_recebido = false;
+    pos_y_recebido = false;
+    angulo_recebido = false;
+    temperatura_recebida = false;
+    falha_eletrica_recebida = false;
+    falha_hidraulica_recebida = false;
+}
+
+bool pacote_completo() {
+    return pos_x_recebido && pos_y_recebido && angulo_recebido &&
+           temperatura_recebida && falha_eletrica_recebida && falha_hidraulica_recebida;
+}
 
 void on_connect(struct mosquitto* mosq, void* obj, int rc) {
     if (rc == 0) {
-        std::cout << "Conectado ao broker MQTT." << std::endl;
-        // Subscrever a tópicos dos caminhões
-        mosquitto_subscribe(mosq, nullptr, "truck/+/sensor/+", 0);  // Sensores
-        mosquitto_subscribe(mosq, nullptr, "truck/+/failure/+", 0);  // Falhas
-        mosquitto_subscribe(mosq, nullptr, "truck/+/actuator/+", 0);  // Atuadores
-        mosquitto_subscribe(mosq, nullptr, "truck/+/alert/+", 0);  // Alertas
-        mosquitto_subscribe(mosq, nullptr, "truck/+/defect/+", 0);  // Defeitos
+        std::cout << "[MQTT] Conectado ao broker MQTT.\n";
+        mosquitto_subscribe(mosq, nullptr, "truck/+/sensor/+", 0);
+        mosquitto_subscribe(mosq, nullptr, "truck/+/failure/+", 0);
+        mosquitto_subscribe(mosq, nullptr, "truck/+/actuator/+", 0);
+        mosquitto_subscribe(mosq, nullptr, "truck/+/alert/+", 0);
+        mosquitto_subscribe(mosq, nullptr, "truck/+/defect/+", 0);
     } else {
-        std::cout << "Falha na conexão: " << rc << std::endl;
+        std::cerr << "[MQTT] Falha na conexão, código: " << rc << std::endl;
     }
 }
 
 void on_message(struct mosquitto* mosq, void* obj, const struct mosquitto_message* msg) {
     std::string topic(msg->topic);
     std::string payload(static_cast<char*>(msg->payload), msg->payloadlen);
-    // --------- PARSER DOS SENSORES MQTT ---------
-    try {
-        if (topic.find("i_posicao_x") != std::string::npos) {
-            sensores_temp.pos_x = std::stoi(payload);
-        }
-        else if (topic.find("i_posicao_y") != std::string::npos) {
-            sensores_temp.pos_y = std::stoi(payload);
-        }
-        else if (topic.find("i_angulo") != std::string::npos) {
-            sensores_temp.angulo = std::stoi(payload);
-        }
-        else if (topic.find("i_temperatura") != std::string::npos) {
-            sensores_temp.temperatura = std::stoi(payload);
-        }
-        else if (topic.find("i_falha_eletrica") != std::string::npos) {
-            sensores_temp.falha_eletrica = (payload == "true");
-        }
-        else if (topic.find("i_falha_hidraulica") != std::string::npos) {
-            sensores_temp.falha_hidraulica = (payload == "true");
-        }
-    } catch (...) {
-        std::cout << "[MQTT] ERRO AO PARSEAR PAYLOAD: " << payload << std::endl;
-    }
-    // ------- IDENTIFICAÇÃO BÁSICA DO SENSOR RECEBIDO -------
-    bool eh_pos_x = topic.find("i_posicao_x") != std::string::npos;
-    bool eh_pos_y = topic.find("i_posicao_y") != std::string::npos;
-    bool eh_ang   = topic.find("i_angulo")    != std::string::npos;
-    bool eh_temp  = topic.find("i_temperatura") != std::string::npos;
-    bool eh_eletr = topic.find("i_falha_eletrica") != std::string::npos;
-    bool eh_hidr  = topic.find("i_falha_hidraulica") != std::string::npos;
 
-    // Apenas mostrando o que chegou (para debug)
-    if (eh_pos_x)  std::cout << "[MQTT] pos_x = "  << payload << std::endl;
-    if (eh_pos_y)  std::cout << "[MQTT] pos_y = "  << payload << std::endl;
-    if (eh_ang)    std::cout << "[MQTT] ang = "    << payload << std::endl;
-    if (eh_temp)   std::cout << "[MQTT] temp = "   << payload << std::endl;
-    if (eh_eletr)  std::cout << "[MQTT] falha_eletrica = " << payload << std::endl;
-    if (eh_hidr)   std::cout << "[MQTT] falha_hidraulica = " << payload << std::endl;
+    bool enviar_buffer = false;
 
-    // --------- ENVIA O PACOTE DE SENSORES PARA O BUFFER ---------
-    if (topic.find("sensor") != std::string::npos || 
-        topic.find("failure") != std::string::npos) 
     {
-        if (buffer_ptr) {
-            buffer_ptr->push(sensores_temp);
+        std::lock_guard<std::mutex> lock(temp_mutex);
+        try {
+            if (topic.find("i_posicao_x") != std::string::npos) {
+                sensores_temp.pos_x = std::stoi(payload);
+                pos_x_recebido = true;
+            } else if (topic.find("i_posicao_y") != std::string::npos) {
+                sensores_temp.pos_y = std::stoi(payload);
+                pos_y_recebido = true;
+            } else if (topic.find("i_angulo") != std::string::npos) {
+                sensores_temp.angulo = std::stoi(payload);
+                angulo_recebido = true;
+            } else if (topic.find("i_temperatura") != std::string::npos) {
+                sensores_temp.temperatura = std::stoi(payload);
+                temperatura_recebida = true;
+            } else if (topic.find("i_falha_eletrica") != std::string::npos) {
+                sensores_temp.falha_eletrica = (payload == "true");
+                falha_eletrica_recebida = true;
+            } else if (topic.find("i_falha_hidraulica") != std::string::npos) {
+                sensores_temp.falha_hidraulica = (payload == "true");
+                falha_hidraulica_recebida = true;
+            }
+        } catch (...) {
+            std::cerr << "[MQTT] ERRO AO PARSEAR PAYLOAD: " << payload << std::endl;
+            return;
+        }
+
+        if (pacote_completo()) {
+            if (buffer_ptr) {
+                // Envia uma cópia segura para o buffer
+                buffer_ptr->push(sensores_temp);
+            }
+            reset_recebidos_flags();
+            enviar_buffer = true;
         }
     }
-    std::cout << "Tópico: " << topic << " | Mensagem: " << payload << std::endl;
+    std::cout << "[MQTT] Tópico: " << topic << " | Mensagem: " << payload;
+    if (enviar_buffer) std::cout << " --> Pacote completo enviado";
+    std::cout << std::endl;
 }
 
 void iniciar_mqtt(BufferCircular& buf) {
@@ -83,25 +139,32 @@ void iniciar_mqtt(BufferCircular& buf) {
 
     mosquitto_lib_init();
     mosq_caminhao = mosquitto_new("caminhao", true, nullptr);
-
     if (!mosq_caminhao) {
-        std::cerr << "Erro ao criar cliente MQTT do caminhão" << std::endl;
+        std::cerr << "Erro ao criar cliente MQTT" << std::endl;
         return;
     }
 
-    mosquitto_connect(mosq_caminhao, "localhost", 1883, 60);
-
-    // Subscrições do caminhão aos sensores
-    mosquitto_subscribe(mosq_caminhao, nullptr, "truck/+/sensor/+", 0);
-    mosquitto_subscribe(mosq_caminhao, nullptr, "truck/+/failure/+", 0);
-
-    // Configurar callback
+    mosquitto_connect_callback_set(mosq_caminhao, on_connect);
     mosquitto_message_callback_set(mosq_caminhao, on_message);
+
+    if (mosquitto_connect(mosq_caminhao, "localhost", 1883, 60) != MOSQ_ERR_SUCCESS) {
+        std::cerr << "Falha ao conectar ao broker MQTT" << std::endl;
+        mosquitto_destroy(mosq_caminhao);
+        mosq_caminhao = nullptr;
+        return;
+    }
 }
 
-void mqtt_loop() {
-    if (mosq_caminhao)
-        mosquitto_loop(mosq_caminhao, 0, 1);
+void mqtt_loop_thread() {
+    while (true) {
+        if (mosq_caminhao) {
+            int rc = mosquitto_loop(mosq_caminhao, 1000, 1);
+            if (rc != MOSQ_ERR_SUCCESS) {
+                std::cerr << "Erro mosquitto_loop: " << rc << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    }
 }
 
 void publicar_atuadores(int id, int aceleracao, int direcao) {
@@ -118,4 +181,30 @@ void publicar_atuadores(int id, int aceleracao, int direcao) {
         (base + "o_direcao").c_str(),
         sizeof(int), &direcao, 0, false
     );
+}
+
+// Exemplo de uso na main()
+int main() {
+    BufferCircular buf(20);
+
+    iniciar_mqtt(buf);
+
+    std::thread mqtt_thread(mqtt_loop_thread);
+
+    // Exemplo loop consumidor que processa dados do buffer
+    while (true) {
+        DadosSensores dados = buf.pop();
+        std::cout << "Processando dados do caminhão: "
+                  << "X=" << dados.pos_x << ", "
+                  << "Y=" << dados.pos_y << ", "
+                  << "Ang=" << dados.angulo << ", "
+                  << "Temp=" << dados.temperatura << ", "
+                  << "Falha Eletrica=" << (dados.falha_eletrica?"SIM":"NAO") << ", "
+                  << "Falha Hidraulica=" << (dados.falha_hidraulica?"SIM":"NAO") 
+                  << std::endl;
+        // Aqui você pode fazer processamento adicional, publica atuadores, etc.
+    }
+
+    mqtt_thread.join();
+    return 0;
 }
