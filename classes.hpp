@@ -45,6 +45,14 @@ struct FalhaEvento {
 };
 // FIM MONITORAMENTO DE FALHAS
 
+//INÍCIO CONTROLE DE NAVEGAÇÃO
+struct Atuadores {
+    int id = 1;         // id do caminhão (adicionar id em DadosSensores no futuro)
+    int aceleracao = 0; // -100..100
+    int direcao = 0;    // -180..180
+};
+
+// FIM CONTROLE DE NAVEGAÇÃO
 // INÍCIO LÓGICA DE COMANDO
 // Enum para representar os comandos do operador, conforme Tabela 2.
 // Usar um enum torna o código mais seguro e fácil de ler.
@@ -78,7 +86,7 @@ struct EstadoVeiculo {
 // FIM LÓGICA DE COMANDO
 
 // Define os tipos possíveis no buffer (adicione mais se precisar)
-using DataVariant = std::variant<DadosSensores, DadosProcessados, FalhaEvento, ComandoOperador>;
+using DataVariant = std::variant<DadosSensores, DadosProcessados, FalhaEvento, ComandoOperador, Atuadores>;
 
 class BufferCircular {
 private:
