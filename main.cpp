@@ -12,6 +12,8 @@
 #include <signal.h>
 #include "threads.hpp"
 #include "mqtt.hpp"
+#include "controle_navegacao.hpp"
+#include "ColetorDeDados.hpp"
 
 std::atomic<bool> running{true};
 
@@ -32,6 +34,8 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     });
+    // Inicia a thread ControleDeNavegacao
+    std::thread thread_controle(ControleDeNavegacao, std::ref(buf));
 
     // INÍCIO LÓGICA DE COMANDO
     // Para testar a lógica de comandos sem ter a Interface Local pronta,
@@ -43,6 +47,9 @@ int main() {
 
     // Inicia a thread TratamentoSensores
     std::thread thread_sensores(TratamentoSensores, std::ref(buf));
+
+    // Inicia a thread ColetorDeDados
+    std::thread thread_coletor(ColetorDeDados, std::ref(buf));
 
     // INÍCIO MONITORAMENTO DE FALHAS
     // Cria e inicia a thread para a tarefa de Monitoramento de Falhas.
@@ -76,6 +83,8 @@ int main() {
     thread_sensores.join();
     thread_falhas.join();
     thread_logica.join();
+    thread_controle.join();
+    thread_coletor.join();
 
     std::cout << "Execução principal concluída após 10 segundos." << std::endl;
     return 0;

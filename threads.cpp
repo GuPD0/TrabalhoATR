@@ -7,6 +7,9 @@
 #include "mqtt.hpp"
 
 extern std::atomic<bool> running;
+std::atomic<bool> falha_temperatura{false};
+std::atomic<bool> falha_eletrica{false};
+std::atomic<bool> falha_hidraulica{false};
 
 // ===================================================================
 // TRATAMENTO DE SENSORES
