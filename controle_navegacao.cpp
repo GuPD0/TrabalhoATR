@@ -173,6 +173,8 @@ void ControleDeNavegacao(BufferCircular& buf) {
             continue;
         }
 
+        // --- PLANEJAMENTO DE ROTA ---
+        
         // 2c) Setpoint / Planejamento de Rota
         else if (std::holds_alternative<DadosProcessados>(item)) {
             DadosProcessados p = std::get<DadosProcessados>(item);

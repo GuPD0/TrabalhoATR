@@ -4,6 +4,8 @@
 #include <thread>
 #include <chrono>
 
+// --- PLANEJAMENTO DE ROTA ---
+
 // Definição das variáveis globais compartilhadas
 Missao missao_atual;
 std::mutex mtx_missao;

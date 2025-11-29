@@ -54,6 +54,8 @@ int main() {
     // Inicia a thread ColetorDeDados
     std::thread thread_coletor(ColetorDeDados, std::ref(buf));
 
+    // --- PLANEJAMENTO DE ROTA ---
+
     // Inicia a thread PlanejamentoDeRota
     std::thread thread_planejamento(PlanejamentoDeRota, std::ref(buf));
 
