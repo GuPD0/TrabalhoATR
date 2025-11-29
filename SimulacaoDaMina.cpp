@@ -270,6 +270,7 @@ public:
                     for (auto& truck : trucks) {
                         if (truck.id == truck_id) {
                             truck.i_falha_eletrica = true;
+                            truck.inject_defect = true;
                             std::cout << "Falha elétrica injetada no caminhão " << truck_id << std::endl;
                         }
                     }
@@ -280,6 +281,7 @@ public:
                     for (auto& truck : trucks) {
                         if (truck.id == truck_id) {
                             truck.i_falha_hidraulica = true;
+                            truck.inject_defect = true;
                             std::cout << "Falha hidráulica injetada no caminhão " << truck_id << std::endl;
                         }
                     }

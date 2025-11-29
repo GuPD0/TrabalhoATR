@@ -8,12 +8,12 @@ import random
 class MQTTInterface:
     # Configuração do mapa / coordenação
     MAP_W = 760
-    MAP_H = 520
+    MAP_H = 390
     COORD_MAX_X = 100  # coordenadas lógicas X vão de 0..100
     COORD_MAX_Y = 100  # coordenadas lógicas Y vão de 0..100
 
     def __init__(self, page: ft.Page):
-        self.pellets = []   # lista de bolinhas no mapa
+        self.pellets = []   # lista de (x, y, control)
         self.pellet_size = 10
         self.page = page
         self.page.title = "Interface de Controle de Caminhões"
@@ -31,6 +31,9 @@ class MQTTInterface:
         # Dados recebidos via MQTT (truck_id -> {sensor: value})
         self.truck_data = {}
 
+        # Controle de movimento local por caminhão (novo)
+        self.local_move_enabled = {}
+
         # Cliente MQTT
         self.mqtt_client = mqtt.Client()
         self.mqtt_client.on_message = self.on_mqtt_message
@@ -47,26 +50,32 @@ class MQTTInterface:
         self.reconnect_button = ft.ElevatedButton("Reconectar Socket", on_click=self.reconnect_socket)
         self.truck_count_label = ft.Text("N° de caminhões: 0", size=14, weight=ft.FontWeight.BOLD)
         self.error_label = ft.Text("", color=ft.Colors.RED, size=12)
-        self.truck_list = ft.Column(scroll=ft.ScrollMode.AUTO, height=400)
+        self.truck_list = ft.Column(scroll=ft.ScrollMode.ALWAYS, height=400, expand=True)
 
         # Dicionários por caminhão
         self.failure_buttons = {}
         self.mode_buttons = {}
         self.manual_inputs = {}
         self.data_labels = {}
+        self.local_move_buttons = {}  # novo: botão para ativar/desativar movimento local
 
         # Criar mapa Pac-Man (estilo B: minimalista — paredes sem bolinhas)
-        # create_pacman_map define self.map_stack (Stack) e retorna o container a ser colocado na UI
         self.map_container = self.create_pacman_map()
 
-        # Layout principal: controles à esquerda, mapa à direita
-        controls_column = ft.Column([
-            ft.Row([self.add_button, self.reconnect_button, self.close_button], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            self.truck_count_label,
-            self.error_label,
-            ft.Text("Caminhões:", size=16, weight=ft.FontWeight.BOLD),
-            self.truck_list
-        ], spacing=10, width=340)
+        controls_column = ft.Container(
+            width=1040,
+            content=ft.Column(
+                [
+                    ft.Row([self.add_button, self.reconnect_button, self.close_button],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    self.truck_count_label,
+                    self.error_label,
+                    ft.Text("Caminhões:", size=16, weight=ft.FontWeight.BOLD),
+                    self.truck_list
+                ],
+                spacing=10
+            )
+        )
 
         self.page.add(
             ft.Container(
@@ -74,7 +83,12 @@ class MQTTInterface:
                     [
                         controls_column,
                         ft.Divider(height=20),
-                        self.map_container
+                        ft.Row(
+                            controls=[
+                                self.map_container
+                            ],
+                            alignment=ft.MainAxisAlignment.CENTER
+                        )
                     ],
                     alignment=ft.MainAxisAlignment.START
                 ),
@@ -82,9 +96,12 @@ class MQTTInterface:
             )
         )
 
-
         # on_close handler seguro
         self.page.on_close = self.on_close
+
+        # configurar handler para mensagens enviadas por threads
+        # (deve ser registrado uma vez, aqui no init)
+        self.page.on_view_message = self.on_page_message
 
         # conectar socket e iniciar threads
         self.connect_socket()
@@ -104,9 +121,19 @@ class MQTTInterface:
             sensor = parts[3]
             if truck_id not in self.truck_data:
                 self.truck_data[truck_id] = {}
+            # marca que esses dados vieram do MQTT (externo)
+            self.truck_data[truck_id]['_external'] = True
             self.truck_data[truck_id][sensor] = payload
-            # Atualizar UI (usar run_async para garantir thread-safe)
-            self.page.run_async(self.update_truck_data, truck_id)
+            # Envia evento para thread principal (Flet 0.28+)
+            try:
+                self.page.send({"type": "update_truck", "truck_id": truck_id})
+            except Exception:
+                # fallback — se por algum motivo page.send falhar, tente atualizar via callback direto
+                # (mas isso normalmente não deve ocorrer)
+                try:
+                    self.update_truck_data(truck_id)
+                except Exception:
+                    pass
 
     def update_truck_data(self, truck_id):
         # Atualiza label de dados e move ícone no mapa se posição disponível
@@ -123,6 +150,7 @@ class MQTTInterface:
                     self.move_truck_on_map(truck_id, px, py)
             except Exception:
                 pass
+            # atualização final da UI
             self.page.update()
 
     # ---------------- Socket ----------------
@@ -174,9 +202,20 @@ class MQTTInterface:
         truck_id = len(self.trucks) + 1
         # adicionar mesmo se socket ausente (útil para testes)
         self.trucks.append(truck_id)
+
+        # inicializa dados do caminhão, marcando como não-external por padrão
+        center_x, center_y = self.COORD_MAX_X/2, self.COORD_MAX_Y/2
+        self.truck_data[truck_id] = {
+            '_external': False,
+            'i_posicao_x': center_x,
+            'i_posicao_y': center_y
+        }
+
         self.add_truck_to_gui(truck_id)
         # posição inicial central do mapa (lógicas 0..100)
-        self.move_truck_on_map(truck_id, self.COORD_MAX_X/2, self.COORD_MAX_Y/2)
+        self.move_truck_on_map(truck_id, center_x, center_y)
+        # habilitar movimento local por padrão como False
+        self.local_move_enabled[truck_id] = False
         self.update_count()
         self.page.update()
         print(f"Caminhão {truck_id} adicionado.")
@@ -190,9 +229,11 @@ class MQTTInterface:
         self.page.window_close()
 
     def add_pellet(self, x, y):
-        # verifica colisão com bolinhas já existentes
+        # verifica colisão com bolinhas já existentes (usa coordenadas em pixels ou lógicas conforme uso)
         for px, py, icon in self.pellets:
-            if abs(px - x) < self.pellet_size*2 and abs(py - y) < self.pellet_size*2:
+            px_p = getattr(icon, "left", px)
+            py_p = getattr(icon, "top", py)
+            if abs(px_p - x) < self.pellet_size*2 and abs(py_p - y) < self.pellet_size*2:
                 print("Colisão: já existe pellet nessa área!")
                 return  # não adiciona
 
@@ -209,7 +250,6 @@ class MQTTInterface:
         self.pellets.append((x, y, pellet))
         self.page.update()
 
-
     def add_truck_to_gui(self, truck_id):
         # Botões de falha
         temp_button = ft.ElevatedButton("Falha Temperatura", on_click=lambda e: self.inject_temp_failure(truck_id))
@@ -220,6 +260,10 @@ class MQTTInterface:
         # Botão modo
         mode_button = ft.ElevatedButton(f"Modo: Automático - Caminhão {truck_id}", on_click=lambda e: self.toggle_mode(truck_id))
         self.mode_buttons[truck_id] = mode_button
+
+        # Botão de movimento local (novo)
+        move_button = ft.ElevatedButton("Ativar Movimento", on_click=lambda e, tid=truck_id: self.toggle_local_move(tid))
+        self.local_move_buttons[truck_id] = move_button
 
         # Inputs manuais (invisíveis até ativar manual)
         x_input = ft.TextField(label="Posição X (int)", width=100, visible=False)
@@ -232,8 +276,13 @@ class MQTTInterface:
         data_label = ft.Text(f"Dados: X: N/A, Y: N/A, Ang: N/A", size=12)
         self.data_labels[truck_id] = data_label
 
-        # Adicionar controles à lista
-        controls_row = ft.Row([mode_button, ft.Row([temp_button, electric_button, hydraulic_button], spacing=5)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, expand=True)
+        # Adicionar controles à lista; incluí o botão de movimento ao lado do modo
+        controls_row = ft.Row([
+            mode_button,
+            move_button,
+            ft.Row([temp_button, electric_button, hydraulic_button], spacing=5)
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, expand=True)
+
         self.truck_list.controls.append(
             ft.Column([
                 ft.Text(f"Caminhão {truck_id}", size=14),
@@ -243,7 +292,8 @@ class MQTTInterface:
             ])
         )
 
-        # criar ícone no mapa (Container com top/left)
+        # criar ícone no mapa (Container com top/left) - posiciona já no centro (não 0,0)
+        init_px, init_py = self.logical_to_pixel(self.COORD_MAX_X/2, self.COORD_MAX_Y/2)
         truck_icon = ft.Container(
             content=ft.Text(str(truck_id), size=12, weight=ft.FontWeight.BOLD),
             width=22,
@@ -252,8 +302,8 @@ class MQTTInterface:
             bgcolor=ft.Colors.YELLOW_700,
             border_radius=ft.border_radius.all(11),
             tooltip=f"Caminhão {truck_id}",
-            top=0,
-            left=0
+            top=init_py,
+            left=init_px
         )
 
         # salvar referência e adicionar ao stack do mapa
@@ -277,6 +327,17 @@ class MQTTInterface:
             self.send_command(f"set_auto:{truck_id}")
         self.page.update()
 
+    def toggle_local_move(self, truck_id):
+        # alterna flag e atualiza texto do botão
+        enabled = self.local_move_enabled.get(truck_id, False)
+        enabled = not enabled
+        self.local_move_enabled[truck_id] = enabled
+        btn = self.local_move_buttons.get(truck_id)
+        if btn:
+            btn.text = "Desativar Movimento" if enabled else "Ativar Movimento"
+        print(f"Movimento local para caminhão {truck_id} = {enabled}")
+        self.page.update()
+
     def set_manual(self, truck_id, x_input, y_input, ang_input):
         try:
             x = int(x_input.value)
@@ -288,6 +349,10 @@ class MQTTInterface:
             print(f"Posição manual definida para caminhão {truck_id}: X={x}, Y={y}, Ângulo={ang}")
             # aplicar localmente também (atualiza ícone)
             self.move_truck_on_map(truck_id, x, y)
+            # marcar como local (pois foi setado manualmente pela UI)
+            self.truck_data.setdefault(truck_id, {})['_external'] = False
+            self.truck_data[truck_id]['i_posicao_x'] = x
+            self.truck_data[truck_id]['i_posicao_y'] = y
         except Exception as e:
             self.error_label.value = f"Erro nos valores manuais para caminhão {truck_id}: {e}"
             self.page.update()
@@ -329,7 +394,7 @@ class MQTTInterface:
         )
 
         # paredes externas
-        wall_thickness = 16
+        wall_thickness = 12
         outer_walls = [
             (0, 0, self.MAP_W, wall_thickness),
             (0, self.MAP_H - wall_thickness, self.MAP_W, wall_thickness),
@@ -348,9 +413,8 @@ class MQTTInterface:
             (580, 120, 120, 16),
             (300, 200, 160, 16),
             (120, 260, 520, 16),
-            (60, 340, 200, 16),
-            (500, 340, 200, 16),
-            (300, 400, 160, 16),
+            (60, 300, 200, 16),
+            (500, 300, 200, 16),
         ]
         for x, y, w, h in internal_walls:
             self.map_stack.controls.append(
@@ -373,50 +437,136 @@ class MQTTInterface:
         """
         if truck_id not in self.map_truck_icons:
             return
+
         px, py = self.logical_to_pixel(x, y)
+
+        # --- verificar colisão entre caminhões ---
+        for other_id, other_icon in self.map_truck_icons.items():
+            if other_id == truck_id:
+                continue
+            ox = getattr(other_icon, "left", None)
+            oy = getattr(other_icon, "top", None)
+            if ox is None or oy is None:
+                continue
+            dist = ((px - ox)**2 + (py - oy)**2) ** 0.5
+            if dist < 22:  # tamanho aproximado das bolinhas
+                print(f"COLISÃO ENTRE CAMINHÕES: {truck_id} bateu em {other_id}")
+                return  # cancela movimento
+
+        # --- colisão com as paredes ---
+        for wall in self.map_stack.controls:
+            # pular se for o próprio ícone
+            if wall == self.map_truck_icons[truck_id]:
+                continue
+            wall_color = getattr(wall, "bgcolor", None)
+            if wall_color == ft.Colors.BLUE_900:  # identifica paredes
+                wx = getattr(wall, "left", None)
+                wy = getattr(wall, "top", None)
+                ww = getattr(wall, "width", None)
+                wh = getattr(wall, "height", None)
+                if None in (wx, wy, ww, wh):
+                    continue
+                # checagem simples de colisão (caixa)
+                if (px + 22 > wx and px < wx + ww and
+                    py + 22 > wy and py < wy + wh):
+                    print(f"COLISÃO COM PAREDE: Caminhão {truck_id}")
+                    return  # impede mover
+
         icon = self.map_truck_icons[truck_id]
         icon.left = px
         icon.top = py
 
-        # colisão com pellets
-        for (px_p, py_p, pellet) in self.pellets:
-            if abs(px - px_p) < self.pellet_size and abs(py - py_p) < self.pellet_size:
+        # colisão com pellets: usamos a posição real do control (left/top)
+        # se colidir, removemos o pellet (comportamento 'comer a bolinha')
+        removed_any = False
+        for (orig_x, orig_y, pellet) in list(self.pellets):
+            p_left = getattr(pellet, "left", orig_x)
+            p_top = getattr(pellet, "top", orig_y)
+            if abs(px - p_left) < self.pellet_size and abs(py - p_top) < self.pellet_size:
                 print(f"COLISÃO: Caminhão {truck_id} bateu em uma bolinha!")
-                return  # impede mover
+                # remove do canvas e da lista
+                try:
+                    self.map_stack.controls.remove(pellet)
+                except ValueError:
+                    pass
+                try:
+                    self.pellets.remove((orig_x, orig_y, pellet))
+                except ValueError:
+                    # procurar e remover qualquer tupla com esse control
+                    self.pellets = [t for t in self.pellets if t[2] != pellet]
+                removed_any = True
+                # continue — não return, deixamos o caminhão ser posicionado sobre o local
 
-        # atualizar UI (thread-safe)
-        try:
+        if removed_any:
+            # atualiza a UI mostrando a bolinha removida
             self.page.update()
-        except Exception:
-            self.page.run_async(lambda: self.page.update())
+        else:
+            # atualização simples de posição
+            self.page.update()
 
     # ---------------- Modo automático local ----------------
     def auto_move_loop(self):
         """
-        Se a simulação externa não enviar posição via MQTT, este loop move caminhões
-        que estiverem em modo Automático localmente (comportamento 'vivo').
+        Loop de movimento automático local.
+        Atualiza caminhões apenas se:
+          - movimento local estiver ativado;
+          - caminhão estiver em modo Automático;
+          - posição não vier de fonte externa (_external == False).
+        Envia eventos via page.send() (correto para Flet 0.28.x).
         """
         while True:
             time.sleep(0.25)
+
             if not self.trucks:
                 continue
+
             for tid in self.trucks:
+
+                # só move se movimento local estiver ativado para este caminhão
+                if not self.local_move_enabled.get(tid, False):
+                    continue
+
+                # só anda se o botão diz que está em modo Automático
                 mode_btn = self.mode_buttons.get(tid)
-                if mode_btn and "Automático" in mode_btn.text:
-                    data = self.truck_data.get(tid, {})
-                    # se dados externos existem, não sobrescrever
-                    if 'i_posicao_x' in data and 'i_posicao_y' in data:
-                        continue
-                    dx = random.uniform(-1.5, 1.5)
-                    dy = random.uniform(-1.5, 1.5)
-                    cx = float(data.get('i_posicao_x', self.COORD_MAX_X / 2))
-                    cy = float(data.get('i_posicao_y', self.COORD_MAX_Y / 2))
-                    nx = max(0, min(self.COORD_MAX_X, cx + dx))
-                    ny = max(0, min(self.COORD_MAX_Y, cy + dy))
-                    self.truck_data.setdefault(tid, {})
-                    self.truck_data[tid]['i_posicao_x'] = nx
-                    self.truck_data[tid]['i_posicao_y'] = ny
-                    self.page.run_async(self.update_truck_data, tid)
+                if not (mode_btn and "Automático" in mode_btn.text):
+                    continue
+
+                data = self.truck_data.get(tid, {})
+
+                # se posição veio de MQTT, não sobrescrever
+                if data.get('_external', False):
+                    continue
+
+                # ----------------------------
+                # cálculo do movimento aleatório
+                # ----------------------------
+                dx = random.uniform(-1.5, 1.5)
+                dy = random.uniform(-1.5, 1.5)
+
+                cx = float(data.get("i_posicao_x", self.COORD_MAX_X / 2))
+                cy = float(data.get("i_posicao_y", self.COORD_MAX_Y / 2))
+
+                nx = max(0, min(self.COORD_MAX_X, cx + dx))
+                ny = max(0, min(self.COORD_MAX_Y, cy + dy))
+
+                # salva nova posição no buffer interno
+                self.truck_data.setdefault(tid, {})
+                self.truck_data[tid]["i_posicao_x"] = nx
+                self.truck_data[tid]["i_posicao_y"] = ny
+                self.truck_data[tid]["_external"] = False
+
+                # notifica thread principal da UI
+                try:
+                    self.page.send({
+                        "type": "update_truck",
+                        "truck_id": tid
+                    })
+                except Exception:
+                    # fallback seguro
+                    try:
+                        self.update_truck_data(tid)
+                    except Exception:
+                        pass
 
     # ---------------- Limpeza / fechamento ----------------
     def on_close(self, e):
@@ -432,6 +582,33 @@ class MQTTInterface:
         except:
             pass
         print("Interface fechada.")
+
+    # ---------------- Handler de mensagens da view (UI thread) ----------------
+    def on_page_message(self, e):
+        """
+        Handler para mensagens enviadas por threads via page.send().
+        Trata 'update_truck' e outros eventos se necessário.
+        """
+        # Em diferentes versões do Flet o payload pode vir em e.data ou e.message
+        msg = None
+        if hasattr(e, "data"):
+            msg = e.data
+        elif hasattr(e, "message"):
+            msg = e.message
+        elif hasattr(e, "args") and len(e.args) > 0:
+            # fallback raro
+            msg = e.args[0]
+
+        if not msg:
+            return
+
+        try:
+            if isinstance(msg, dict) and msg.get("type") == "update_truck":
+                tid = msg.get("truck_id")
+                if tid is not None:
+                    self.update_truck_data(tid)
+        except Exception as ex:
+            print("Erro em on_page_message:", ex)
 
 # ---------------- Entrypoint ----------------
 def main(page: ft.Page):
