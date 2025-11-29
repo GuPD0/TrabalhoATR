@@ -35,6 +35,8 @@ void TratamentoSensores(BufferCircular& buf)
     std::vector<int> historico_ang;     // para média angular
     const size_t ordem_ang = 5;
 
+    // --- PLANEJAMENTO DE ROTA ---
+
     // --- NOVO: Atualiza posição conhecida para o Planejamento ler ---
     ultima_posicao_conhecida.x.store(x_filtrado);
     ultima_posicao_conhecida.y.store(y_filtrado);

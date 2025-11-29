@@ -157,7 +157,7 @@ public:
     }
 };
 
-// --- Adicionar ao final de classes.hpp ---
+// --- PLANEJAMENTO DE ROTA ---
 
 // Estrutura para definir o destino vindo do MQTT
 struct Missao {

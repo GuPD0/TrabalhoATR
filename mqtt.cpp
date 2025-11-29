@@ -116,6 +116,9 @@ static void on_message(struct mosquitto*, void*, const mosquitto_message* msg)
     catch (...) {
         std::cerr << "[MQTT] Erro ao interpretar payload: " << payload << "\n";
     }
+
+    // --- PLANEJAMENTO DE ROTA ---
+
     // Lógica para receber rota: tópico "truck/1/set_route" payload "X,Y" (ex: "500,200")
 else if (topic.find("set_route") != std::string::npos) {
 try {
