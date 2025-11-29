@@ -4,6 +4,8 @@
 #include <thread>
 #include <chrono>
 
+extern std::atomic<bool> running;
+
 // --- PLANEJAMENTO DE ROTA ---
 
 // Definição das variáveis globais compartilhadas
@@ -14,7 +16,7 @@ PosicaoAtual ultima_posicao_conhecida;
 void PlanejamentoDeRota(BufferCircular& buf) {
     std::cout << "[Planejamento] Thread iniciada." << std::endl;
 
-    while (true) { 
+    while (running.load()) { 
         Missao missao_local;
         
         // 1. Cópia segura da missão atual (protegida por mutex)

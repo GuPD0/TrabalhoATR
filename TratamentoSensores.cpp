@@ -5,6 +5,8 @@
 #include <iostream>
 #include <cmath>
 
+extern std::atomic<bool> running;
+
 // ======================================================================
 // FUNÇÃO AUXILIAR: Média angular correta (para evitar erro de wrap-around)
 // ======================================================================
@@ -35,14 +37,6 @@ void TratamentoSensores(BufferCircular& buf)
     std::vector<int> historico_ang;     // para média angular
     const size_t ordem_ang = 5;
 
-    // --- PLANEJAMENTO DE ROTA ---
-
-    // --- NOVO: Atualiza posição conhecida para o Planejamento ler ---
-    ultima_posicao_conhecida.x.store(x_filtrado);
-    ultima_posicao_conhecida.y.store(y_filtrado);
-    ultima_posicao_conhecida.ang.store(ang_filtrado);
-    // ---------------------------------------------------------------
-
     while (running.load()) {
 
         // 1) Recebe do buffer principal
@@ -65,6 +59,11 @@ void TratamentoSensores(BufferCircular& buf)
             historico_ang.erase(historico_ang.begin());
 
         double ang_f = media_angular(historico_ang);
+        
+        // --- atualizar posição atual para Planejamento de Rota ---
+        ultima_posicao_conhecida.x.store(x_f);
+        ultima_posicao_conhecida.y.store(y_f);
+        ultima_posicao_conhecida.ang.store(static_cast<int>(std::round(ang_f)));
 
         // 4) Debug (opcional)
         std::cout << "[TratamentoSensores] "

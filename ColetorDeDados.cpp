@@ -11,6 +11,8 @@
 #include <map>
 #include <mutex>
 
+extern std::atomic<bool> running;
+
 // flags globais de falha (já existentes no sistema)
 extern std::map<int, FalhasStatus> falhas_caminhoes;
 extern std::mutex falhas_mutex;

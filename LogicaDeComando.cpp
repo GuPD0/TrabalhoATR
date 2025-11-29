@@ -17,11 +17,13 @@ extern std::atomic<bool> falha_hidraulica;
 // ID padrão (substituir futuramente por parâmetro)
 static constexpr int DEFAULT_TRUCK_ID = 1;
 
-void LogicaDeComando(BufferCircular& buf)
-{
+void LogicaDeComando(BufferCircular& buf) {
     EstadoVeiculo estado;
     int aceleracao = 0; // -100..100
     int direcao = 0;    // -180..180
+
+    // Armazenar último DadosProcessados lido (se precisar)
+    DadosProcessados ultimo_dp;
 
     // Para evitar repassar evento múltiplas vezes, usamos variáveis locais
     while (running.load()) {
@@ -29,7 +31,9 @@ void LogicaDeComando(BufferCircular& buf)
         // 0) Checar eventos de falha vindos por flags/atomics (monitoramento de falhas)
         // Se alguma flag estiver true, cria-se um FalhaEvento e empurra no buffer
         // (assim ColetorDeDados e Controle recebem o evento)
+        bool any_fault = false;
         if (falha_temperatura.exchange(false)) {
+            any_fault = true;
             FalhaEvento fe;
             fe.tipo = TipoFalha::TemperaturaCritica;
             fe.descricao = "Temperatura crítica detectada (flag).";
@@ -38,6 +42,7 @@ void LogicaDeComando(BufferCircular& buf)
             std::cout << "[LogicaDeComando] Evento: Temperatura crítica (flag)\n";
         }
         if (falha_eletrica.exchange(false)) {
+            any_fault = true;
             FalhaEvento fe;
             fe.tipo = TipoFalha::Eletrica;
             fe.descricao = "Falha elétrica detectada (flag).";
@@ -46,12 +51,27 @@ void LogicaDeComando(BufferCircular& buf)
             std::cout << "[LogicaDeComando] Evento: Falha elétrica (flag)\n";
         }
         if (falha_hidraulica.exchange(false)) {
+            any_fault = true;
             FalhaEvento fe;
             fe.tipo = TipoFalha::Hidraulica;
             fe.descricao = "Falha hidráulica detectada (flag).";
             try { buf.push(fe); } catch (...) {}
             estado.e_defeito = true;
             std::cout << "[LogicaDeComando] Evento: Falha hidráulica (flag)\n";
+        }
+        if (any_fault) {
+            // segurança: parar o caminhão imediatamente (publicar via MQTT e enviar Atuadores ao buffer)
+            aceleracao = 0;
+            direcao = 0;
+            publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
+
+            Atuadores atu_zero;
+            atu_zero.id = DEFAULT_TRUCK_ID;
+            atu_zero.aceleracao = aceleracao;
+            atu_zero.direcao = direcao;
+            try { buf.push(atu_zero); } catch(...) {}
+
+            // não retornamos aqui; deixamos o loop continuar para processar itens do buffer
         }
 
         // 1) Ler próximo item do buffer (bloqueante)
@@ -61,50 +81,32 @@ void LogicaDeComando(BufferCircular& buf)
         // 2.a DadosProcessados -> atualização de estado / decisão automática
         if (std::holds_alternative<DadosProcessados>(item)) {
             auto dp = std::get<DadosProcessados>(item);
+            ultimo_dp = dp;
 
-            // Se estiver no modo automático e não houver defeito, definir comandos automáticos simples
-            if (estado.e_automatico && !estado.e_defeito) {
-                // Lógica simples: aceleração fixa leve, direção neutra.
-                // (Você pode trocar por controle mais sofisticado / setpoints vindos do Planejamento)
-                aceleracao = 20; // valor por default
-                direcao = 0;
-
-                // publicar via MQTT e também empurrar Atuadores no buffer
-                publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
-
-                Atuadores atu;
-                atu.id = DEFAULT_TRUCK_ID;
-                atu.aceleracao = aceleracao;
-                atu.direcao = direcao;
-                try { buf.push(atu); } catch (...) {}
-
-                std::cout << "[LogicaDeComando] AUTO: publicados atuadores (acc=" << aceleracao << " dir=" << direcao << ")\n";
-            }
+            // NÃO executar controle automático aqui — isso é feita por ControleDeNavegacao.
+            // Podemos usar DadosProcessados para decisões de alto nível (logs, validações), por ora apenas log:
+            std::cout << "[LogicaDeComando] DadosProcessados recebidos: ID=" << dp.id
+                      << " X=" << dp.posicao_x << " Y=" << dp.posicao_y
+                      << " ANG=" << dp.angulo_x << "\n";
         }
 
         // 2.b Evento de Falha (proveniente de Monitoramento de Falhas que escreveu no buffer)
         else if (std::holds_alternative<FalhaEvento>(item)) {
-            auto falha = std::get<FalhaEvento>(item);
-            // Se falha grave, travar o veículo
-            if (falha.tipo == TipoFalha::TemperaturaCritica ||
-                falha.tipo == TipoFalha::Eletrica ||
-                falha.tipo == TipoFalha::Hidraulica) 
-            {
-                estado.e_defeito = true;
-                aceleracao = 0;
-                direcao = 0;
-                publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
+            auto fe = std::get<FalhaEvento>(item);
+            // Marca defeito e zera atuadores como medida de segurança
+            estado.e_defeito = true;
 
-                Atuadores atu;
-                atu.id = DEFAULT_TRUCK_ID;
-                atu.aceleracao = aceleracao;
-                atu.direcao = direcao;
-                try { buf.push(atu); } catch (...) {}
+            aceleracao = 0;
+            direcao = 0;
+            publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
 
-                std::cout << "[LogicaDeComando] FALHA GRAVE PROCESSADA -> atuadores zerados\n";
-            } else if (falha.tipo == TipoFalha::TemperaturaAlerta) {
-                std::cout << "[LogicaDeComando] ALERTA de temperatura (evento)\n";
-            }
+            Atuadores atu_zero;
+            atu_zero.id = DEFAULT_TRUCK_ID;
+            atu_zero.aceleracao = aceleracao;
+            atu_zero.direcao = direcao;
+            try { buf.push(atu_zero); } catch(...) {}
+
+            std::cout << "[LogicaDeComando] FalhaEvento processado: " << fe.descricao << "\n";
         }
 
         // 2.c Comando do operador (Interface Local)
@@ -114,8 +116,19 @@ void LogicaDeComando(BufferCircular& buf)
                 case TipoComando::SET_MANUAL:
                     if (!estado.e_defeito) {
                         estado.e_automatico = false;
-                        // bumpless: deixar atuadores com valores atuais (não alterar)
+                        // bumpless transfer: mantemos os valores atuais de atuadores (não alteramos aceleracao/direcao)
+                        // Publicar os valores atuais via MQTT para garantir coerência externa e log
+                        publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
+
+                        Atuadores atu_m;
+                        atu_m.id = DEFAULT_TRUCK_ID;
+                        atu_m.aceleracao = aceleracao;
+                        atu_m.direcao = direcao;
+                        try { buf.push(atu_m); } catch(...) {}
+
                         std::cout << "[LogicaDeComando] MODO MANUAL ativado (bumpless)\n";
+                    } else {
+                        std::cout << "[LogicaDeComando] SET_MANUAL ignorado: defeito presente\n";
                     }
                     break;
 
@@ -135,10 +148,20 @@ void LogicaDeComando(BufferCircular& buf)
                     break;
 
                 case TipoComando::ACELERA:
+                    // Só no modo MANUAL e sem defeito
                     if (!estado.e_defeito && !estado.e_automatico) {
                         aceleracao += 10;
                         if (aceleracao > 100) aceleracao = 100;
+                        // publicar via MQTT e também enviar ao buffer para log
+                        publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
+                        Atuadores atu_a;
+                        atu_a.id = DEFAULT_TRUCK_ID;
+                        atu_a.aceleracao = aceleracao;
+                        atu_a.direcao = direcao;
+                        try { buf.push(atu_a); } catch(...) {}
                         std::cout << "[LogicaDeComando] MANUAL: ACELERA -> " << aceleracao << "\n";
+                    } else {
+                        std::cout << "[LogicaDeComando] COMANDO ACELERA ignorado (modo automático ou defeito)\n";
                     }
                     break;
 
@@ -146,7 +169,15 @@ void LogicaDeComando(BufferCircular& buf)
                     if (!estado.e_defeito && !estado.e_automatico) {
                         direcao += 10;
                         if (direcao > 180) direcao = 180;
+                        publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
+                        Atuadores atu_r;
+                        atu_r.id = DEFAULT_TRUCK_ID;
+                        atu_r.aceleracao = aceleracao;
+                        atu_r.direcao = direcao;
+                        try { buf.push(atu_r); } catch(...) {}
                         std::cout << "[LogicaDeComando] MANUAL: GIRA_DIREITA -> " << direcao << "\n";
+                    } else {
+                        std::cout << "[LogicaDeComando] COMANDO GIRA_DIREITA ignorado (modo automático ou defeito)\n";
                     }
                     break;
 
@@ -154,23 +185,22 @@ void LogicaDeComando(BufferCircular& buf)
                     if (!estado.e_defeito && !estado.e_automatico) {
                         direcao -= 10;
                         if (direcao < -180) direcao = -180;
+                        publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
+                        Atuadores atu_l;
+                        atu_l.id = DEFAULT_TRUCK_ID;
+                        atu_l.aceleracao = aceleracao;
+                        atu_l.direcao = direcao;
+                        try { buf.push(atu_l); } catch(...) {}
                         std::cout << "[LogicaDeComando] MANUAL: GIRA_ESQUERDA -> " << direcao << "\n";
+                    } else {
+                        std::cout << "[LogicaDeComando] COMANDO GIRA_ESQUERDA ignorado (modo automático ou defeito)\n";
                     }
                     break;
 
                 default:
                     break;
             }
-
-            // Após processar comando manual, publicar atuações atuais (manter coerência)
-            publicar_atuadores(DEFAULT_TRUCK_ID, aceleracao, direcao);
-            Atuadores atu;
-            atu.id = DEFAULT_TRUCK_ID;
-            atu.aceleracao = aceleracao;
-            atu.direcao = direcao;
-            try { buf.push(atu); } catch (...) {}
         }
-
         // 3) Estado debug
         std::cout << "[Estado] AUTO=" << estado.e_automatico
                   << " DEF=" << estado.e_defeito
