@@ -173,16 +173,32 @@ void ControleDeNavegacao(BufferCircular& buf) {
             continue;
         }
 
-        // 2c) Setpoint / Planejamento de Rota (a tarefa de Planejamento pode publicar um tipo DadosProcessados usado como setpoint)
+        // 2c) Setpoint / Planejamento de Rota
         else if (std::holds_alternative<DadosProcessados>(item)) {
             DadosProcessados p = std::get<DadosProcessados>(item);
-            // Aqui interpretamos DadosProcessados como setpoint (posição desejada)
-            set_x = static_cast<double>(p.posicao_x);
-            set_y = static_cast<double>(p.posicao_y);
-            set_ang = static_cast<double>(p.angulo_x);
-            std::cout << "[Controle] NOVO SETPOINT recebido: X="<<set_x<<" Y="<<set_y<<" ANG="<<set_ang<<"\n";
-            continue;
+
+            // Se o ID for 999, é uma ordem do Planejamento de Rota
+            if (p.id == 999) {
+                // O Planejamento manda a velocidade desejada no campo posicao_y
+                double velocidade_alvo = static_cast<double>(p.posicao_y);
+             
+                // O Planejamento manda o angulo desejado no campo angulo_x
+                double angulo_alvo = static_cast<double>(p.angulo_x);
+
+                // Atualiza setpoints locais do controlador
+                // Nota: Você deve ter variáveis como 'set_vel' e 'set_ang' no escopo da função
+                set_x = 0; // Não usamos X/Y direto no controle PID simples, usamos erro angular
+                set_y = 0; 
+             
+                // Lógica interna: Aqui você adaptaria para o seu PID usar 'angulo_alvo'
+                // Exemplo:
+                set_ang = angulo_alvo;
+             
+                // HACK: Ajustar o KP_VEL dinamicamente ou usar a velocidade enviada como limite
+                // std::cout << "[Controle] Setpoint Atualizado: Vel=" << velocidade_alvo << " Ang=" << angulo_alvo << "\n";
         }
+        continue;
+    }
 
         // 2d) Caso seja outro tipo, ignoramos (ou tratamos se for o caso)
     }

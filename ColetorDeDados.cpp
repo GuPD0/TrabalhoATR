@@ -110,7 +110,7 @@ void ColetorDeDados(BufferCircular& buf)
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        //std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
     logfile.close();

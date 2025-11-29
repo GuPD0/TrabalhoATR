@@ -157,4 +157,27 @@ public:
     }
 };
 
+// --- Adicionar ao final de classes.hpp ---
+
+// Estrutura para definir o destino vindo do MQTT
+struct Missao {
+    int x_final = 0;
+    int y_final = 0;
+    bool ativa = false; // true = caminhão tentando chegar no destino
+};
+
+// Estrutura atômica para compartilhar a posição atual sem travar o buffer
+// Isso permite que o Planejamento "espie" onde o caminhão está a qualquer momento
+#include <atomic>
+struct PosicaoAtual {
+    std::atomic<int> x{0};
+    std::atomic<int> y{0};
+    std::atomic<int> ang{0};
+};
+
+// Declaração de globais que serão definidas no main ou planejamento
+extern Missao missao_atual;
+extern std::mutex mtx_missao;
+extern PosicaoAtual ultima_posicao_conhecida;
+
 #endif

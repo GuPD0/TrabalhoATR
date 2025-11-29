@@ -22,8 +22,6 @@ extern std::map<int, FalhasStatus> falhas_caminhoes;
 extern std::mutex falhas_mutex;
 
 // Declarações das funções das threads
-void TratamentoSensores(BufferCircular& buf);
 void MonitoramentoDeFalhas(BufferCircular& buf);
-void LogicaDeComando(BufferCircular& buf);
 
 #endif

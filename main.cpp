@@ -14,6 +14,9 @@
 #include "mqtt.hpp"
 #include "controle_navegacao.hpp"
 #include "ColetorDeDados.hpp"
+#include "TratamentoSensores.hpp"
+#include "planejamento.hpp"
+#include "LogicaDeComando.hpp"
 
 std::atomic<bool> running{true};
 
@@ -51,6 +54,9 @@ int main() {
     // Inicia a thread ColetorDeDados
     std::thread thread_coletor(ColetorDeDados, std::ref(buf));
 
+    // Inicia a thread PlanejamentoDeRota
+    std::thread thread_planejamento(PlanejamentoDeRota, std::ref(buf));
+
     // INÍCIO MONITORAMENTO DE FALHAS
     // Cria e inicia a thread para a tarefa de Monitoramento de Falhas.
     // A função MonitoramentoDeFalhas será executada em seu próprio fluxo de controle.
@@ -85,6 +91,7 @@ int main() {
     thread_logica.join();
     thread_controle.join();
     thread_coletor.join();
+    thread_planejamento.join();
 
     std::cout << "Execução principal concluída após 10 segundos." << std::endl;
     return 0;
