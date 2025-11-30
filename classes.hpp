@@ -140,22 +140,46 @@ public:
 // Classe para filtro de média móvel
 class FiltroMediaMovel {
 private:
-    std::vector<int> amostras;
+    std::vector<int> buffer;
     size_t ordem;
+    size_t idx;            // next write index
+    size_t preenchido;     // quantos elementos válidos temos (<= ordem)
+    long long soma;        // soma corrente (int64 para segurança)
 
 public:
-    FiltroMediaMovel(size_t m) : ordem(m) {}
+    explicit FiltroMediaMovel(size_t m) : buffer(m), ordem(m), idx(0), preenchido(0), soma(0) {
+        if (ordem == 0) ordem = 1;
+    }
 
     int filtrar(int nova_amostra) {
-        if (amostras.size() < ordem) {
-            amostras.push_back(nova_amostra);
+        if (ordem == 0) return nova_amostra; // proteção defensiva
+
+        if (preenchido < ordem) {
+            // ainda enchendo o buffer
+            buffer[idx] = nova_amostra;
+            soma += static_cast<long long>(nova_amostra);
+            ++preenchido;
+            idx = (idx + 1) % ordem;
+            return static_cast<int>(soma / static_cast<long long>(preenchido));
         } else {
-            amostras.erase(amostras.begin());
-            amostras.push_back(nova_amostra);
+            // buffer circular cheio: substituir valor antigo
+            int antigo = buffer[idx];
+            buffer[idx] = nova_amostra;
+            soma += static_cast<long long>(nova_amostra) - static_cast<long long>(antigo);
+            idx = (idx + 1) % ordem;
+            return static_cast<int>(soma / static_cast<long long>(ordem));
         }
-        return std::accumulate(amostras.begin(), amostras.end(), 0) / amostras.size();
+    }
+
+    // opcional: reseta o filtro
+    void reset() {
+        std::fill(buffer.begin(), buffer.end(), 0);
+        idx = 0;
+        preenchido = 0;
+        soma = 0;
     }
 };
+
 
 // --- PLANEJAMENTO DE ROTA ---
 

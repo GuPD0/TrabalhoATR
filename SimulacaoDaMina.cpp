@@ -91,8 +91,15 @@ public:
             double rx = static_cast<double>((rand() % 11) - 5);
             double ry = static_cast<double>((rand() % 11) - 5);
             double rang = static_cast<double>((rand() % 11) - 5) * 0.1;
-            i_posicao_x = static_cast<int>(pos_x_real + rx);
-            i_posicao_y = static_cast<int>(pos_y_real + ry);
+            double px = pos_x_real + rx;
+            double py = pos_y_real + ry;
+
+            px = clamp_custom(px, -5000.0, 5000.0);
+            py = clamp_custom(py, -5000.0, 5000.0);
+
+            i_posicao_x = static_cast<int>(px);
+            i_posicao_y = static_cast<int>(py);
+
             i_angulo = static_cast<int>((angulo_real * 180.0 / M_PI) + rang);
         } else {
             double accel_real = (static_cast<double>(o_aceleracao) / 100.0) * 10.0;
@@ -107,11 +114,17 @@ public:
             double rx = static_cast<double>((rand() % 11) - 5);
             double ry = static_cast<double>((rand() % 11) - 5);
             double rang = static_cast<double>((rand() % 11) - 5) * 0.1;
-            i_posicao_x = static_cast<int>(pos_x_real + rx);
-            i_posicao_y = static_cast<int>(pos_y_real + ry);
+
+            double px = pos_x_real + rx;
+            double py = pos_y_real + ry;
+
+            px = clamp_custom(px, -5000.0, 5000.0);
+            py = clamp_custom(py, -5000.0, 5000.0);
+
+            i_posicao_x = static_cast<int>(px);
+            i_posicao_y = static_cast<int>(py);
             i_angulo = static_cast<int>((angulo_real * 180.0 / M_PI) + rang);
         }
-
         if (!inject_defect) {
             double ruido_temp = static_cast<double>((rand() % 21) - 10);
             i_temperatura = 25 + ((rand() % 51) - 25) + static_cast<int>(ruido_temp);
