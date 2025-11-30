@@ -1,6 +1,6 @@
 #include "LogicaDeComando.hpp"
-#include "mqtt.hpp"        // publicar_atuadores
-#include "threads.hpp"     // declarações de flags e estruturas (se necessário)
+#include "mqtt.hpp"                       // publicar_atuadores
+#include "MonitoramentoDeFalhas.hpp"     // declarações de flags e estruturas (se necessário)
 #include "classes.hpp"
 
 #include <iostream>
