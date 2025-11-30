@@ -297,6 +297,48 @@ class MQTTInterface:
         self.pellets.append((x, y, pellet))
         self.page.update()
 
+    def stop_truck(self, truck_id):
+        # para o movimento local
+        self.local_move_enabled[truck_id] = False
+
+        # NÃO apaga mais o destino!
+
+        # impede movimento externo
+        self.truck_data.setdefault(truck_id, {})
+        self.truck_data[truck_id]["_external"] = False
+
+        # cor de falha
+        icon = self.map_truck_icons.get(truck_id)
+        if icon:
+            icon.bgcolor = ft.Colors.RED
+
+        print(f"[FALHA] Caminhão {truck_id} PARADO e marcado como falha.")
+        self.page.update()
+
+    def repair_truck(self, truck_id):
+        # Se existe destino ativo, recarrega o movimento
+        if truck_id in self.local_targets:
+            self.local_move_enabled[truck_id] = True
+            btn = self.local_move_buttons.get(truck_id)
+            if btn:
+                btn.text = "Desativar Movimento"
+        else:
+            self.local_move_enabled[truck_id] = False
+
+        # Volta a aceitar posição externa (planner)
+        self.truck_data.setdefault(truck_id, {})
+        self.truck_data[truck_id]["_external"] = True
+
+        # Cor original
+        icon = self.map_truck_icons.get(truck_id)
+        if icon:
+            icon.bgcolor = ft.Colors.YELLOW_700
+
+        print(f"[RECUPERAÇÃO] Caminhão {truck_id} arrumado e liberado.")
+        self.page.update()
+
+
+
     def add_truck_to_gui(self, truck_id):
         # Botões de falha
         temp_button = ft.ElevatedButton("Falha Temperatura", on_click=lambda e, tid=truck_id: self.inject_temp_failure(tid))
@@ -349,13 +391,26 @@ class MQTTInterface:
             )
         )
 
+        # Botão de reset de falha
+        reset_button = ft.ElevatedButton(
+            "Resetar Falha",
+            on_click=lambda e, tid=truck_id: self.repair_truck(tid)
+        )
+
+
 
         # Adicionar controles à lista; incluí o botão de movimento ao lado do modo
         controls_row = ft.Row([
             mode_button,
             move_button,
-            ft.Row([temp_button, electric_button, hydraulic_button], spacing=5)
+            ft.Row([
+                temp_button,
+                electric_button,
+                hydraulic_button,
+                reset_button
+            ], spacing=5)
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, expand=True)
+
 
         self.truck_list.controls.append(
             ft.Column([
@@ -364,6 +419,7 @@ class MQTTInterface:
                 data_label,
                 # NOVO BLOCO: DESTINO
                 ft.Text("Destino do Caminhão:", size=12, weight=ft.FontWeight.BOLD),
+                ft.Text("Valores máximos: X = 100, Y = 100", size=11, color=ft.Colors.GREY),
                 ft.Row([dest_x, dest_y, send_sp], spacing=5),
                 ft.Row([x_input, y_input, ang_input, set_manual_button])
             ])
@@ -436,15 +492,19 @@ class MQTTInterface:
 
     def inject_temp_failure(self, truck_id):
         self.send_command(f"inject_temp_failure:{truck_id}")
+        self.stop_truck(truck_id)
         print(f"Falha de temperatura injetada no caminhão {truck_id}")
 
     def inject_electric_failure(self, truck_id):
         self.send_command(f"inject_electric_failure:{truck_id}")
+        self.stop_truck(truck_id)
         print(f"Falha elétrica injetada no caminhão {truck_id}")
 
     def inject_hydraulic_failure(self, truck_id):
         self.send_command(f"inject_hydraulic_failure:{truck_id}")
+        self.stop_truck(truck_id)
         print(f"Falha hidráulica injetada no caminhão {truck_id}")
+
 
     def update_count(self):
         self.truck_count_label.value = f"N° de caminhões: {len(self.trucks)}"
