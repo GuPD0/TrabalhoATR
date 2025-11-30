@@ -18,8 +18,8 @@ struct FalhasStatus {
 };
 
 // Mapa global caminhão -> status de falhas
-extern std::mutex falhas_mutex;
 extern std::map<int, FalhasStatus> falhas_caminhoes;
+extern std::mutex falhas_mutex;
 
 // Thread de monitoramento de falhas
 void MonitoramentoDeFalhas();
