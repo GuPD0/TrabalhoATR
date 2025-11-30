@@ -69,7 +69,7 @@ class MQTTInterface:
         self.map_container = self.create_pacman_map()
 
         controls_column = ft.Container(
-            width=1040,
+            width=1500,
             content=ft.Column(
                 [
                     ft.Row([self.add_button, self.reconnect_button, self.close_button],
