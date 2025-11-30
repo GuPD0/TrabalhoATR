@@ -48,6 +48,32 @@ void TratamentoSensores(BufferCircular& buf)
         }
 
         DadosSensores s = std::get<DadosSensores>(item);
+        // logo após obter `DadosSensores s = std::get<DadosSensores>(item);`
+
+        // --- LOG RAW (útil pra debug) ---
+        std::cout << "[TratamentoSensores][RAW] pos=(" << s.pos_x << "," << s.pos_y
+                << ") ang=" << s.angulo << " temp=" << s.temperatura
+                << " fe=" << s.falha_eletrica << " fh=" << s.falha_hidraulica << std::endl;
+
+        // --- VALIDAÇÃO / CLAMP (protege contra valores absurdos) ---
+        const int POS_LIMIT = 100000;   // ajuste conforme seu domínio (ex.: 5k já usei antes)
+        const int TEMP_MIN = -200;
+        const int TEMP_MAX = 500;
+
+        if (s.pos_x < -POS_LIMIT || s.pos_x > POS_LIMIT ||
+            s.pos_y < -POS_LIMIT || s.pos_y > POS_LIMIT ||
+            s.angulo < -10000 || s.angulo > 10000 ||
+            s.temperatura < TEMP_MIN || s.temperatura > TEMP_MAX)
+        {
+            std::cerr << "[TratamentoSensores][WARN] valor fora do esperado, descartando amostra: "
+                    << "X="<<s.pos_x<<" Y="<<s.pos_y<<" ANG="<<s.angulo<<" TEMP="<<s.temperatura<<"\n";
+            continue; // descarta amostra corrupta
+        }
+
+        // Agora aplique clamp pequeno (opcional) para manter valores sensatos no filtro
+        s.pos_x = std::max(-POS_LIMIT, std::min(POS_LIMIT, s.pos_x));
+        s.pos_y = std::max(-POS_LIMIT, std::min(POS_LIMIT, s.pos_y));
+        s.angulo = ((s.angulo % 360) + 360) % 360; // normaliza 0..359 se fizer sentido no seu sistema
 
         // 2) Filtragem de posição
         int x_f = filtro_x.filtrar(s.pos_x);
