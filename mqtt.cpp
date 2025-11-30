@@ -129,6 +129,10 @@ static void on_message(struct mosquitto*, void*, const mosquitto_message* msg)
             // ---------------------- PACOTE COMPLETO --------------------------
             if (pacote_completo() && g_buffer) {
                 g_buffer->push(sensor_temp);
+
+                // ZERA o struct para não carregar lixo antigo
+                sensor_temp = DadosSensores{};   // <-- AQUI
+
                 reset_flags();
             }
         }
