@@ -20,6 +20,8 @@ class MQTTInterface:
         self.page = page
         self.page.title = "Interface de Controle de Caminhões"
         self.page.theme_mode = ft.ThemeMode.LIGHT
+        self.local_targets = {}  # truck_id -> (dest_x, dest_y)
+
 
         # Socket para comunicar com a simulação da mina (C++)
         self.sock = None
@@ -295,6 +297,48 @@ class MQTTInterface:
         self.pellets.append((x, y, pellet))
         self.page.update()
 
+    def stop_truck(self, truck_id):
+        # para o movimento local
+        self.local_move_enabled[truck_id] = False
+
+        # NÃO apaga mais o destino!
+
+        # impede movimento externo
+        self.truck_data.setdefault(truck_id, {})
+        self.truck_data[truck_id]["_external"] = False
+
+        # cor de falha
+        icon = self.map_truck_icons.get(truck_id)
+        if icon:
+            icon.bgcolor = ft.Colors.RED
+
+        print(f"[FALHA] Caminhão {truck_id} PARADO e marcado como falha.")
+        self.page.update()
+
+    def repair_truck(self, truck_id):
+        # Se existe destino ativo, recarrega o movimento
+        if truck_id in self.local_targets:
+            self.local_move_enabled[truck_id] = True
+            btn = self.local_move_buttons.get(truck_id)
+            if btn:
+                btn.text = "Desativar Movimento"
+        else:
+            self.local_move_enabled[truck_id] = False
+
+        # Volta a aceitar posição externa (planner)
+        self.truck_data.setdefault(truck_id, {})
+        self.truck_data[truck_id]["_external"] = True
+
+        # Cor original
+        icon = self.map_truck_icons.get(truck_id)
+        if icon:
+            icon.bgcolor = ft.Colors.YELLOW_700
+
+        print(f"[RECUPERAÇÃO] Caminhão {truck_id} arrumado e liberado.")
+        self.page.update()
+
+
+
     def add_truck_to_gui(self, truck_id):
         # Botões de falha
         temp_button = ft.ElevatedButton("Falha Temperatura", on_click=lambda e, tid=truck_id: self.inject_temp_failure(tid))
@@ -324,15 +368,49 @@ class MQTTInterface:
         # Inputs do setpoint (destino)
         dest_x = ft.TextField(label="Destino X", width=80)
         dest_y = ft.TextField(label="Destino Y", width=80)
-        send_sp = ft.ElevatedButton("Enviar destino",
-                                    on_click=lambda e, tid=truck_id, dx=dest_x, dy=dest_y: self.send_setpoint(tid, dx.value, dy.value))
+
+        # Botão original (somente planejador)
+        send_sp = ft.ElevatedButton(
+            "Enviar destino",
+            on_click=lambda e, tid=truck_id, dx=dest_x, dy=dest_y:
+                self.send_setpoint(tid, dx.value, dy.value)
+        )
+
+        # Botão novo (local + planejador)
+        local_move_btn = ft.ElevatedButton(
+            "Mover Local",
+            on_click=lambda e, tid=truck_id, dx=dest_x, dy=dest_y: (
+                self.truck_data.setdefault(tid, {}),
+                self.truck_data[tid].update({
+                    "local_dest": (float(dx.value), float(dy.value)),
+                    "_external": False     # dá prioridade ao movimento local
+                }),
+                self.local_move_enabled.__setitem__(tid, True),
+                self.send_setpoint(tid, dx.value, dy.value),  # envia ao planejador
+                print(f"[LOCAL] Movendo caminhão {tid} para {dx.value}, {dy.value}")
+            )
+        )
+
+        # Botão de reset de falha
+        reset_button = ft.ElevatedButton(
+            "Resetar Falha",
+            on_click=lambda e, tid=truck_id: self.repair_truck(tid)
+        )
+
+
 
         # Adicionar controles à lista; incluí o botão de movimento ao lado do modo
         controls_row = ft.Row([
             mode_button,
             move_button,
-            ft.Row([temp_button, electric_button, hydraulic_button], spacing=5)
+            ft.Row([
+                temp_button,
+                electric_button,
+                hydraulic_button,
+                reset_button
+            ], spacing=5)
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, expand=True)
+
 
         self.truck_list.controls.append(
             ft.Column([
@@ -341,6 +419,7 @@ class MQTTInterface:
                 data_label,
                 # NOVO BLOCO: DESTINO
                 ft.Text("Destino do Caminhão:", size=12, weight=ft.FontWeight.BOLD),
+                ft.Text("Valores máximos: X = 100, Y = 100", size=11, color=ft.Colors.GREY),
                 ft.Row([dest_x, dest_y, send_sp], spacing=5),
                 ft.Row([x_input, y_input, ang_input, set_manual_button])
             ])
@@ -413,15 +492,19 @@ class MQTTInterface:
 
     def inject_temp_failure(self, truck_id):
         self.send_command(f"inject_temp_failure:{truck_id}")
+        self.stop_truck(truck_id)
         print(f"Falha de temperatura injetada no caminhão {truck_id}")
 
     def inject_electric_failure(self, truck_id):
         self.send_command(f"inject_electric_failure:{truck_id}")
+        self.stop_truck(truck_id)
         print(f"Falha elétrica injetada no caminhão {truck_id}")
 
     def inject_hydraulic_failure(self, truck_id):
         self.send_command(f"inject_hydraulic_failure:{truck_id}")
+        self.stop_truck(truck_id)
         print(f"Falha hidráulica injetada no caminhão {truck_id}")
+
 
     def update_count(self):
         self.truck_count_label.value = f"N° de caminhões: {len(self.trucks)}"
@@ -563,10 +646,10 @@ class MQTTInterface:
         """
         Loop de movimento automático local.
         Atualiza caminhões apenas se:
-          - movimento local estiver ativado;
-          - caminhão estiver em modo Automático;
-          - posição não vier de fonte externa (_external == False).
-        Envia eventos via page.send() (correto para Flet 0.28.x).
+        - movimento local estiver ativado;
+        - caminhão estiver em modo Automático.
+        Quando movimento local está ativo, ignoramos '_external'
+        para que a UI tome controle mesmo se vier posição do planner.
         """
         while True:
             time.sleep(0.25)
@@ -587,40 +670,64 @@ class MQTTInterface:
 
                 data = self.truck_data.get(tid, {})
 
-                # se posição veio de MQTT (planner ou sensor), não sobrescrever
-                if data.get('_external', False):
+                # se posição veio de MQTT mas movimento local está ativado, ignoramos
+                # (a UI agora tem prioridade)
+                if data.get('_external', False) and not self.local_move_enabled.get(tid, False):
                     continue
 
-                # ----------------------------
-                # cálculo do movimento aleatório
-                # ----------------------------
-                dx = random.uniform(-1.5, 1.5)
-                dy = random.uniform(-1.5, 1.5)
+                # -------------------------------------
+                # Movimento local até DESTINO definido
+                # -------------------------------------
+                if tid not in self.local_targets:
+                    continue  # sem destino → não anda
 
-                cx = float(data.get("i_posicao_x", self.COORD_MAX_X / 2))
-                cy = float(data.get("i_posicao_y", self.COORD_MAX_Y / 2))
+                dest_x, dest_y = self.local_targets[tid]
 
-                nx = max(0, min(self.COORD_MAX_X, cx + dx))
-                ny = max(0, min(self.COORD_MAX_Y, cy + dy))
+                cx = float(data.get("i_posicao_x", self.COORD_MAX_X/2))
+                cy = float(data.get("i_posicao_y", self.COORD_MAX_Y/2))
 
-                # salva nova posição no buffer interno
+                # vetor direção
+                vx = dest_x - cx
+                vy = dest_y - cy
+                dist = (vx*vx + vy*vy)**0.5
+
+                # chegou ao destino?
+                if dist < 1.0:
+                    print(f"Caminhão {tid} chegou ao destino.")
+                    self.local_move_enabled[tid] = False
+                    if tid in self.local_targets:
+                        del self.local_targets[tid]
+                    btn = self.local_move_buttons.get(tid)
+                    if btn:
+                        btn.text = "Ativar Movimento"
+                    continue
+
+                # normaliza direção e aplica velocidade
+                speed = 1.2  # pixels por iteração, ajuste fino
+                vx /= dist
+                vy /= dist
+
+                nx = cx + vx * speed
+                ny = cy + vy * speed
+
+                # limita ao mapa lógico
+                nx = max(0, min(self.COORD_MAX_X, nx))
+                ny = max(0, min(self.COORD_MAX_Y, ny))
+
+                # salva nova posição local
                 self.truck_data.setdefault(tid, {})
                 self.truck_data[tid]["i_posicao_x"] = nx
                 self.truck_data[tid]["i_posicao_y"] = ny
                 self.truck_data[tid]["_external"] = False
 
-                # notifica thread principal da UI
+                # notifica UI
                 try:
-                    self.page.send({
-                        "type": "update_truck",
-                        "truck_id": tid
-                    })
-                except Exception:
-                    # fallback seguro
-                    try:
-                        self.update_truck_data(tid)
-                    except Exception:
-                        pass
+                    self.page.send({"type": "update_truck", "truck_id": tid})
+                except:
+                    self.update_truck_data(tid)
+
+
+
 
     # ---------------- Limpeza / fechamento ----------------
     def on_close(self, e):
@@ -678,9 +785,20 @@ class MQTTInterface:
         payload = f"{x},{y}"
 
         try:
+            # envia via MQTT normalmente
             self.mqtt_client.publish(topic, payload)
             print(f"[MQTT] Setpoint enviado p/ caminhão {truck_id}: ({x},{y})")
-            self.error_label.value = f"Destino enviado para caminhão {truck_id}"
+
+            # salva destino local para movimento automático
+            self.local_targets[truck_id] = (x, y)
+
+            # ativa movimento local automaticamente
+            self.local_move_enabled[truck_id] = True
+            btn = self.local_move_buttons.get(truck_id)
+            if btn:
+                btn.text = "Desativar Movimento"
+
+            self.error_label.value = f"Destino definido para caminhão {truck_id}"
         except Exception as e:
             print("Erro ao publicar setpoint via MQTT:", e)
             self.error_label.value = f"Erro ao enviar destino para caminhão {truck_id}"
