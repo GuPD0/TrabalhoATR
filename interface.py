@@ -1,9 +1,11 @@
+# interface_mina.py
 import flet as ft
 import socket
 import time
 import threading
 import paho.mqtt.client as mqtt
 import random
+import traceback
 
 class MQTTInterface:
     # Configuração do mapa / coordenação
@@ -39,10 +41,14 @@ class MQTTInterface:
         self.mqtt_client.on_message = self.on_mqtt_message
         try:
             self.mqtt_client.connect("localhost", 1883, 60)
+            # Assinaturas iniciais
             self.mqtt_client.subscribe("truck/+/sensor/+")
+            # Recebe posições calculadas pelo planejador
+            self.mqtt_client.subscribe("planner/truck/+/position")
             self.mqtt_client.loop_start()
         except Exception as e:
             print("Erro ao conectar MQTT:", e)
+            traceback.print_exc()
 
         # Componentes da UI (controle esquerdo)
         self.add_button = ft.ElevatedButton("Adicionar Caminhão", on_click=self.add_truck)
@@ -110,30 +116,69 @@ class MQTTInterface:
 
     # ---------------- MQTT callbacks ----------------
     def on_mqtt_message(self, client, userdata, msg):
-        topic = msg.topic
-        payload = msg.payload.decode()
-        parts = topic.split('/')
-        if len(parts) >= 4 and parts[0] == 'truck':
-            try:
-                truck_id = int(parts[1])
-            except:
-                return
-            sensor = parts[3]
-            if truck_id not in self.truck_data:
-                self.truck_data[truck_id] = {}
-            # marca que esses dados vieram do MQTT (externo)
-            self.truck_data[truck_id]['_external'] = True
-            self.truck_data[truck_id][sensor] = payload
-            # Envia evento para thread principal (Flet 0.28+)
-            try:
-                self.page.send({"type": "update_truck", "truck_id": truck_id})
-            except Exception:
-                # fallback — se por algum motivo page.send falhar, tente atualizar via callback direto
-                # (mas isso normalmente não deve ocorrer)
+        try:
+            topic = msg.topic
+            payload = msg.payload.decode()
+            parts = topic.split('/')
+            # Tratamento de tópicos da forma 'truck/{id}/sensor/{sensor}'
+            if len(parts) >= 4 and parts[0] == 'truck' and parts[2] == 'sensor':
                 try:
-                    self.update_truck_data(truck_id)
+                    truck_id = int(parts[1])
+                except:
+                    return
+                sensor = parts[3]
+                if truck_id not in self.truck_data:
+                    self.truck_data[truck_id] = {}
+                # marca que esses dados vieram do MQTT (externo)
+                self.truck_data[truck_id]['_external'] = True
+                self.truck_data[truck_id][sensor] = payload
+                # Envia evento para thread principal (Flet 0.28+)
+                try:
+                    self.page.send({"type": "update_truck", "truck_id": truck_id})
                 except Exception:
-                    pass
+                    # fallback — se por algum motivo page.send falhar, tente atualizar via callback direto
+                    try:
+                        self.update_truck_data(truck_id)
+                    except Exception:
+                        pass
+                return
+
+            # -----------------------------------------------------------
+            # NOVO: posição vinda do PLANEJADOR DE ROTA
+            # tópico esperado: planner/truck/{id}/position
+            # payload esperado: "x,y" (ex: "42.3,12.5")
+            # -----------------------------------------------------------
+            if len(parts) >= 4 and parts[0] == 'planner' and parts[1] == 'truck' and parts[3] == 'position':
+                try:
+                    truck_id = int(parts[2])
+                except:
+                    return
+
+                try:
+                    px_str, py_str = payload.split(',')
+                    px = float(px_str)
+                    py = float(py_str)
+                except:
+                    print("Payload inválido de position do planner:", payload)
+                    return
+
+                if truck_id not in self.truck_data:
+                    self.truck_data[truck_id] = {}
+
+                self.truck_data[truck_id]["i_posicao_x"] = px
+                self.truck_data[truck_id]["i_posicao_y"] = py
+                self.truck_data[truck_id]["_external"] = True
+
+                # notifica UI para atualizar
+                try:
+                    self.page.send({"type": "update_truck", "truck_id": truck_id})
+                except Exception:
+                    self.update_truck_data(truck_id)
+                return
+
+        except Exception as e:
+            print("Erro em on_mqtt_message:", e)
+            traceback.print_exc()
 
     def update_truck_data(self, truck_id):
         # Atualiza label de dados e move ícone no mapa se posição disponível
@@ -252,13 +297,13 @@ class MQTTInterface:
 
     def add_truck_to_gui(self, truck_id):
         # Botões de falha
-        temp_button = ft.ElevatedButton("Falha Temperatura", on_click=lambda e: self.inject_temp_failure(truck_id))
-        electric_button = ft.ElevatedButton("Falha Elétrica", on_click=lambda e: self.inject_electric_failure(truck_id))
-        hydraulic_button = ft.ElevatedButton("Falha Hidráulica", on_click=lambda e: self.inject_hydraulic_failure(truck_id))
+        temp_button = ft.ElevatedButton("Falha Temperatura", on_click=lambda e, tid=truck_id: self.inject_temp_failure(tid))
+        electric_button = ft.ElevatedButton("Falha Elétrica", on_click=lambda e, tid=truck_id: self.inject_electric_failure(tid))
+        hydraulic_button = ft.ElevatedButton("Falha Hidráulica", on_click=lambda e, tid=truck_id: self.inject_hydraulic_failure(tid))
         self.failure_buttons[truck_id] = [temp_button, electric_button, hydraulic_button]
 
         # Botão modo
-        mode_button = ft.ElevatedButton(f"Modo: Automático - Caminhão {truck_id}", on_click=lambda e: self.toggle_mode(truck_id))
+        mode_button = ft.ElevatedButton(f"Modo: Automático - Caminhão {truck_id}", on_click=lambda e, tid=truck_id: self.toggle_mode(tid))
         self.mode_buttons[truck_id] = mode_button
 
         # Botão de movimento local (novo)
@@ -269,12 +314,18 @@ class MQTTInterface:
         x_input = ft.TextField(label="Posição X (int)", width=100, visible=False)
         y_input = ft.TextField(label="Posição Y (int)", width=100, visible=False)
         ang_input = ft.TextField(label="Ângulo (-180 a 180)", width=120, visible=False)
-        set_manual_button = ft.ElevatedButton("Definir Manual", on_click=lambda e: self.set_manual(truck_id, x_input, y_input, ang_input), visible=False)
+        set_manual_button = ft.ElevatedButton("Definir Manual", on_click=lambda e, tid=truck_id, xi=x_input, yi=y_input, ai=ang_input: self.set_manual(tid, xi, yi, ai), visible=False)
         self.manual_inputs[truck_id] = (x_input, y_input, ang_input, set_manual_button)
 
         # Label de dados
         data_label = ft.Text(f"Dados: X: N/A, Y: N/A, Ang: N/A", size=12)
         self.data_labels[truck_id] = data_label
+
+        # Inputs do setpoint (destino)
+        dest_x = ft.TextField(label="Destino X", width=80)
+        dest_y = ft.TextField(label="Destino Y", width=80)
+        send_sp = ft.ElevatedButton("Enviar destino",
+                                    on_click=lambda e, tid=truck_id, dx=dest_x, dy=dest_y: self.send_setpoint(tid, dx.value, dy.value))
 
         # Adicionar controles à lista; incluí o botão de movimento ao lado do modo
         controls_row = ft.Row([
@@ -288,6 +339,9 @@ class MQTTInterface:
                 ft.Text(f"Caminhão {truck_id}", size=14),
                 controls_row,
                 data_label,
+                # NOVO BLOCO: DESTINO
+                ft.Text("Destino do Caminhão:", size=12, weight=ft.FontWeight.BOLD),
+                ft.Row([dest_x, dest_y, send_sp], spacing=5),
                 ft.Row([x_input, y_input, ang_input, set_manual_button])
             ])
         )
@@ -533,7 +587,7 @@ class MQTTInterface:
 
                 data = self.truck_data.get(tid, {})
 
-                # se posição veio de MQTT, não sobrescrever
+                # se posição veio de MQTT (planner ou sensor), não sobrescrever
                 if data.get('_external', False):
                     continue
 
@@ -609,6 +663,28 @@ class MQTTInterface:
                     self.update_truck_data(tid)
         except Exception as ex:
             print("Erro em on_page_message:", ex)
+
+    # --------------------- MQTT: enviar setpoint ---------------------
+    def send_setpoint(self, truck_id, x, y):
+        try:
+            x = float(x)
+            y = float(y)
+        except:
+            self.error_label.value = f"Destino inválido para caminhão {truck_id}"
+            self.page.update()
+            return
+
+        topic = f"planner/truck/{truck_id}/setpoint"
+        payload = f"{x},{y}"
+
+        try:
+            self.mqtt_client.publish(topic, payload)
+            print(f"[MQTT] Setpoint enviado p/ caminhão {truck_id}: ({x},{y})")
+            self.error_label.value = f"Destino enviado para caminhão {truck_id}"
+        except Exception as e:
+            print("Erro ao publicar setpoint via MQTT:", e)
+            self.error_label.value = f"Erro ao enviar destino para caminhão {truck_id}"
+        self.page.update()
 
 # ---------------- Entrypoint ----------------
 def main(page: ft.Page):
