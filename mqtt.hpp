@@ -2,6 +2,8 @@
 #define MQTT_HPP
 
 #include "classes.hpp"
+#include "MonitoramentoDeFalhas.hpp"
+#include <string>
 
 // Inicializa o cliente MQTT e registra callbacks
 void iniciar_mqtt(BufferCircular& buf);
