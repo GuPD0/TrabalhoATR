@@ -21,6 +21,8 @@ class MQTTInterface:
         self.page.title = "Interface de Controle de Caminhões"
         self.page.theme_mode = ft.ThemeMode.LIGHT
         self.local_targets = {}  # truck_id -> (dest_x, dest_y)
+        self.truck_failure = {}  # truck_id -> True/False
+
 
 
         # Socket para comunicar com a simulação da mina (C++)
@@ -129,8 +131,17 @@ class MQTTInterface:
                 except:
                     return
                 sensor = parts[3]
+
+                if self.truck_failure.get(truck_id, False):
+                    return
+
+                if truck_id in self.local_targets:
+                    return
+
+
                 if truck_id not in self.truck_data:
                     self.truck_data[truck_id] = {}
+
                 # marca que esses dados vieram do MQTT (externo)
                 self.truck_data[truck_id]['_external'] = True
                 self.truck_data[truck_id][sensor] = payload
@@ -158,6 +169,11 @@ class MQTTInterface:
 
                 try:
                     px_str, py_str = payload.split(',')
+                    if self.truck_failure.get(truck_id, False):
+                        return
+
+                    if truck_id in self.local_targets:
+                        return
                     px = float(px_str)
                     py = float(py_str)
                 except:
@@ -263,6 +279,7 @@ class MQTTInterface:
         self.move_truck_on_map(truck_id, center_x, center_y)
         # habilitar movimento local por padrão como False
         self.local_move_enabled[truck_id] = False
+        self.truck_failure[truck_id] = False
         self.update_count()
         self.page.update()
         print(f"Caminhão {truck_id} adicionado.")
@@ -301,7 +318,7 @@ class MQTTInterface:
         # para o movimento local
         self.local_move_enabled[truck_id] = False
 
-        # NÃO apaga mais o destino!
+        self.truck_failure[truck_id] = True
 
         # impede movimento externo
         self.truck_data.setdefault(truck_id, {})
@@ -316,6 +333,9 @@ class MQTTInterface:
         self.page.update()
 
     def repair_truck(self, truck_id):
+
+        self.truck_failure[truck_id] = False
+
         # Se existe destino ativo, recarrega o movimento
         if truck_id in self.local_targets:
             self.local_move_enabled[truck_id] = True
